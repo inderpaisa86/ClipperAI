@@ -1,0 +1,19 @@
+# Datos locales: base de datos, originales, temporales y salidas
+/data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+
+# Secretos y configuración local
+.env
+.env.local
+
+# Archivos temporales de escritura atómica
+*.tmp

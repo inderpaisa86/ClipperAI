@@ -1,0 +1,44 @@
+import sqlite3
+from typing import Any
+
+COLUMNAS = (
+    "id, proyecto_id, nombre, ruta_original, tamano_bytes, duracion_segundos, "
+    "ancho, alto, fps, codec_video, codec_audio, formato, creado"
+)
+
+
+def insertar(conexion: sqlite3.Connection, datos: dict[str, Any]) -> int:
+    cursor = conexion.execute(
+        """
+        INSERT INTO videos (
+            proyecto_id, nombre, ruta_original, tamano_bytes, duracion_segundos,
+            ancho, alto, fps, codec_video, codec_audio, formato
+        ) VALUES (
+            :proyecto_id, :nombre, :ruta_original, :tamano_bytes, :duracion_segundos,
+            :ancho, :alto, :fps, :codec_video, :codec_audio, :formato
+        )
+        """,
+        datos,
+    )
+    conexion.commit()
+    return int(cursor.lastrowid)
+
+
+def listar_por_proyecto(conexion: sqlite3.Connection, proyecto_id: int) -> list[sqlite3.Row]:
+    return conexion.execute(
+        f"SELECT {COLUMNAS} FROM videos WHERE proyecto_id = ? ORDER BY id",
+        (proyecto_id,),
+    ).fetchall()
+
+
+def obtener(conexion: sqlite3.Connection, video_id: int) -> sqlite3.Row | None:
+    return conexion.execute(
+        f"SELECT {COLUMNAS} FROM videos WHERE id = ?", (video_id,)
+    ).fetchone()
+
+
+def eliminar(conexion: sqlite3.Connection, video_id: int) -> bool:
+    """Borra solo la fila de SQLite. El archivo original no se toca."""
+    cursor = conexion.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+    conexion.commit()
+    return cursor.rowcount > 0
