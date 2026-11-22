@@ -328,8 +328,8 @@ Todos bajo `/api/v1` y protegidos por token (sección 7).
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/proyectos` | Lista los proyectos. |
-| POST | `/proyectos` | Crea un proyecto. Cuerpo: `{"nombre": "..."}`. |
+| GET | `/proyectos` | Lista los proyectos. Cada uno incluye `cantidad_videos` (D-027). |
+| POST | `/proyectos` | Crea un proyecto. Cuerpo: `{"nombre": "..."}`. Responde con `cantidad_videos: 0`. |
 | GET | `/videos?proyecto_id=n` | Lista los videos de un proyecto, con estado de disponibilidad. |
 | POST | `/videos` | Registra un video por referencia. Cuerpo: `{"proyecto_id": n, "ruta": "..."}`. Responde 201. |
 | POST | `/videos/seleccion` | Abre el selector nativo. Responde `{"ruta": "..."}` o `{"ruta": null}`. |
@@ -339,15 +339,24 @@ Todos bajo `/api/v1` y protegidos por token (sección 7).
 
 Códigos de error: 404 (no existe), 409 (duplicado en el proyecto), 422 (archivo o formato no válido), 501 (selector no disponible), 503 (FFprobe no disponible).
 
+### 17.1.1 Datos de desarrollo
+
+Los registros que existen hoy en `data/clipperai.db` (proyectos como "Prueba integral" y sus videos) son datos de desarrollo creados durante las pruebas. No son datos de usuario ni deben usarse como referencia de producción. La base se conservará hasta que se decida lo contrario, y no debe borrarse ni recrearse como parte del desarrollo normal.
+
 ### 17.2 Flujo de importación
 
 1. El usuario elige el archivo con el selector o escribe la ruta.
-2. El servicio valida la ruta (D-024) y comprueba que el proyecto exista.
+2. El servicio valida la ruta (D-024), incluida la cadena de directorios padre frente a enlaces y junctions, y comprueba que el proyecto exista. La validación se repite en cada disponibilidad y en cada transmisión.
 3. FFprobe devuelve los metadatos. Un fallo de lectura se rechaza con 422.
 4. Se inserta la fila. Si el archivo ya estaba en el proyecto, responde 409.
 
 ### 17.3 Cobertura de pruebas
 
-- Backend: 92 pruebas pasan en `backend/tests/`. Una se omite porque Windows no permite crear enlaces simbólicos sin privilegios.
+- Backend: 106 pruebas pasan en `backend/tests/` (incluye `test_conexion.py`, según D-028). Incluyen el conteo de videos por proyecto (sin videos, con uno, con varios, aislamiento entre proyectos y recuento tras eliminar). Una se omite porque Windows no permite crear enlaces simbólicos a archivos sin privilegios. Incluye las pruebas de enlaces y junctions en directorios padre.
 - Cubren importación válida e inválida, rutas con espacios, tildes y caracteres especiales, archivos grandes, Range (206, 416, varios rangos), eliminación sin tocar el original, duplicados, selector simulado en Windows y macOS, y migraciones.
 - Integración por el proxy con un archivo de 911 MB: 25 comprobaciones pasan. La transmisión completa se verificó aparte: el SHA256 del archivo descargado coincide con el original.
+
+## 18. Pendientes técnicos
+
+- **`frontend/next-env.d.ts`:** tiene cambios sin commit desde antes de la fase de proyectos. Next 16.4.6 reescribe las rutas de tipos de `.next/types/` a `.next/dev/types/` en modo desarrollo, y se regenera con cada `dev` o `build`. Pendiente: decidir si se versiona la versión regenerada o si el archivo sale de Git.
+- **`frontend/tsconfig.tsbuildinfo`:** es caché incremental de `tsc` y está versionado. Cada typecheck lo modifica. Pendiente: quitarlo del seguimiento de Git (`git rm --cached` y entrada en `.gitignore`).

@@ -42,18 +42,29 @@ export function Cabecera() {
       </Link>
       <nav aria-label="Principal">
         <ul className="navegacion">
-          {ENLACES.map((enlace) => {
+          {ENLACES.map((enlace, indice) => {
             if (enlace.href === null) {
+              const idTooltip = `proximamente-${indice}`;
               return (
                 <li key={enlace.etiqueta}>
-                  <span className="proximamente" aria-disabled="true" title="Próximamente">
+                  <span
+                    className="proximamente"
+                    tabIndex={0}
+                    aria-disabled="true"
+                    aria-describedby={idTooltip}
+                  >
                     {enlace.etiqueta}
+                    <span id={idTooltip} role="tooltip" className="globo">
+                      Próximamente
+                    </span>
                   </span>
                 </li>
               );
             }
+
             const activo =
               enlace.href === "/" ? ruta === "/" : ruta?.startsWith(enlace.href) === true;
+
             return (
               <li key={enlace.etiqueta}>
                 <Link href={enlace.href} aria-current={activo ? "page" : undefined}>

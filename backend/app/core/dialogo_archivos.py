@@ -26,7 +26,13 @@ $dialogo.Title = 'Seleccionar video'
 $dialogo.Filter = 'Videos|*.mp4;*.m4v;*.mov;*.mkv;*.webm;*.avi|Todos los archivos|*.*'
 $dialogo.Multiselect = $false
 $propietario = New-Object System.Windows.Forms.Form
+$propietario.Text = 'ClipperAI'
+$propietario.ShowInTaskbar = $false
+$propietario.Opacity = 0
 $propietario.TopMost = $true
+$propietario.StartPosition = 'CenterScreen'
+$propietario.Show()
+$propietario.Activate()
 if ($dialogo.ShowDialog($propietario) -eq [System.Windows.Forms.DialogResult]::OK) {
     Write-Output $dialogo.FileName
 }

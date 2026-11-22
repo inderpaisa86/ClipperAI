@@ -275,7 +275,13 @@ El archivo original nunca se copia, modifica ni elimina. Eliminar un video borra
 
 Si el original se mueve o se borra después de importarlo, el video aparece como no disponible. El registro se conserva.
 
-**Consecuencias.** Un enlace simbólico en la última posición de la ruta se rechaza. Un enlace en un directorio intermedio no se detecta. Ese caso queda documentado como límite.
+**Revisión (tras validación manual del Módulo 1).** La comprobación original solo miraba el último componente de la ruta, y la disponibilidad y la transmisión seguían enlaces con `is_file()`. Esto permitía que un directorio intermedio convertido en enlace o junction (Windows) redirigiera la lectura a otro archivo. Se corrigió así:
+
+- Se rechaza cualquier ruta con `..`.
+- Se rechaza la ruta si ella misma o cualquier directorio padre es un enlace simbólico o un junction (`_contiene_enlaces`).
+- La disponibilidad y la transmisión revalidan la ruta en cada uso (`_archivo_accesible`). Un enlace creado después de importar deja el video como no disponible y la transmisión responde 404.
+
+**Consecuencias.** Las rutas que pasan por un enlace legítimo del sistema operativo también se rechazan. En macOS, por ejemplo, `/var` y `/tmp` son enlaces hacia `/private`. El selector nativo devuelve rutas reales, así que el caso normal no se ve afectado. Las pruebas cubren junctions (Windows) y enlaces a directorios (POSIX). Los enlaces a archivos siguen omitiéndose en Windows sin privilegios.
 
 ---
 
@@ -308,3 +314,46 @@ Si el original se mueve o se borra después de importarlo, el video aparece como
 - Los archivos de video nunca pasan por el proxy como cuerpo de una petición. Solo la transmisión de salida viaja por el proxy, como flujo.
 
 **Consecuencias.** Un endpoint nuevo con escritura o parámetros requiere su entrada en `lib/proxy/destinos.ts`.
+
+---
+
+## D-027. Conteo de videos por proyecto mediante servicio público de videos
+**Fecha:** Mejora de proyectos y navegación
+**Estado:** Aprobada por el usuario (opción A).
+
+**Contexto.** La lista de proyectos necesita mostrar cuántos videos tiene cada uno. El dato vive en la tabla `videos`, que pertenece al módulo `videos`. D-012 prohíbe que `projects` lea esa tabla.
+
+**Decisión.**
+
+- `GET /api/v1/proyectos` y `POST /api/v1/proyectos` devuelven el campo `cantidad_videos` (entero, cero si el proyecto no tiene videos).
+- `projects.service` obtiene el conteo llamando a dos funciones públicas de `videos.service`: `contar_por_proyecto` (un proyecto) y `contar_por_proyectos` (un diccionario con todos los proyectos, en una sola consulta). `projects.repository` no referencia la tabla `videos`.
+- `videos.repository` ejecuta las consultas `COUNT`. Solo `videos` accede a su tabla.
+- La dependencia entre los dos módulos es circular a nivel de importación (`videos.service` ya usaba `projects.service` para validar el proyecto). Se resuelve importando el módulo completo (`from app.modules.videos import service as videos`) y usando sus funciones solo en tiempo de llamada.
+
+**Alternativas descartadas.**
+
+- Que `projects` consulte `SELECT ... FROM videos`. Rompe D-012.
+- Que el frontend pida los videos de cada proyecto para contarlos. Obliga a una petición por proyecto.
+
+**Consecuencias.** El cambio es aditivo: no hay migración ni cambios en los datos existentes. Si algún día el conteo necesita filtrar por disponibilidad del archivo, esa lógica va en `videos.service`, no en `projects`.
+
+---
+
+## D-028. Conexiones SQLite por petición sin afinidad de hilo
+**Fecha:** Corrección de estabilidad de la API
+**Estado:** Aprobada por el usuario.
+
+**Contexto.** La dependencia `obtener_conexion` es un generador síncrono. FastAPI ejecuta su parte de apertura y la de cierre en hilos del pool, que pueden ser distintos. Con `sqlite3` por defecto, el cierre en otro hilo lanza `ProgrammingError` y la petición responde 500. El fallo era intermitente y afectaba a todos los endpoints con la dependencia, incluido `GET /api/v1/proyectos`.
+
+**Decisión.**
+
+- `conectar` abre la conexión con `check_same_thread=False`.
+- Invariante: cada conexión tiene un único dueño a la vez. Una petición crea su conexión, la usa y la cierra. Ninguna conexión se comparte entre peticiones ni se usa desde dos hilos simultáneamente.
+- El endpoint de transmisión (`/stream`) solo usa la conexión antes de responder. El flujo posterior lee el archivo sin base de datos.
+
+**Alternativas descartadas.**
+
+- Convertir los endpoints a `async`. Obliga a reescribir todos los accesos y no evita la afinidad de hilo del cierre.
+- Un pool de conexiones compartido. No hace falta para una aplicación local de un solo usuario y añade estado compartido.
+
+**Consecuencias.** Un cambio futuro que comparta una conexión entre peticiones o entre hilos a la vez rompe el invariante. `backend/tests/test_conexion.py` reproduce el fallo original (crear y cerrar en hilos distintos, usar la conexión desde otro hilo) y verifica el cierre también ante errores.

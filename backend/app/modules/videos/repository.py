@@ -37,6 +37,20 @@ def obtener(conexion: sqlite3.Connection, video_id: int) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def contar_por_proyecto(conexion: sqlite3.Connection, proyecto_id: int) -> int:
+    fila = conexion.execute(
+        "SELECT COUNT(*) AS cantidad FROM videos WHERE proyecto_id = ?", (proyecto_id,)
+    ).fetchone()
+    return int(fila["cantidad"])
+
+
+def contar_por_proyectos(conexion: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Una fila por proyecto que tenga videos. Los proyectos sin videos no aparecen."""
+    return conexion.execute(
+        "SELECT proyecto_id, COUNT(*) AS cantidad FROM videos GROUP BY proyecto_id"
+    ).fetchall()
+
+
 def eliminar(conexion: sqlite3.Connection, video_id: int) -> bool:
     """Borra solo la fila de SQLite. El archivo original no se toca."""
     cursor = conexion.execute("DELETE FROM videos WHERE id = ?", (video_id,))

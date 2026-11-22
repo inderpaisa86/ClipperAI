@@ -31,6 +31,7 @@ export type Proyecto = {
   id: number;
   nombre: string;
   creado: string;
+  cantidad_videos: number;
 };
 
 export type Video = {

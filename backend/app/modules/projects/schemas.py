@@ -15,3 +15,4 @@ class ProyectoRespuesta(BaseModel):
     id: int
     nombre: str
     creado: str
+    cantidad_videos: int

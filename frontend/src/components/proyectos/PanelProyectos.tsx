@@ -43,45 +43,90 @@ export function PanelProyectos() {
     }
   }
 
+  const totalVideos = proyectos?.reduce((suma, proyecto) => suma + proyecto.cantidad_videos, 0) ?? 0;
+
   return (
-    <section className="tarjeta" aria-labelledby="titulo-proyectos">
-      <h2 id="titulo-proyectos">Proyectos</h2>
+    <>
+      <header className="encabezado-pagina">
+        <div>
+          <h1>Proyectos</h1>
+          <p className="texto-secundario">
+            Agrupe los videos que ClipperAI analizará y revise los clips de cada proyecto.
+          </p>
+        </div>
+        {proyectos !== null && (
+          <dl className="resumen" aria-label="Resumen de proyectos y videos">
+            <div className="estadistica">
+              <dt>Proyectos</dt>
+              <dd>{proyectos.length}</dd>
+            </div>
+            <div className="estadistica">
+              <dt>Videos</dt>
+              <dd>{totalVideos}</dd>
+            </div>
+          </dl>
+        )}
+      </header>
 
-      <form className="formulario en-linea" onSubmit={enviar}>
-        <label htmlFor="nombre-proyecto">Nombre del proyecto</label>
-        <input
-          id="nombre-proyecto"
-          type="text"
-          value={nombre}
-          onChange={(e) => setNombre(e.target.value)}
-          maxLength={120}
-          required
-        />
-        <button className="boton" type="submit" disabled={guardando || nombre.trim() === ""}>
-          {guardando ? "Creando…" : "Crear proyecto"}
-        </button>
-      </form>
-
-      {error !== null && <p className="mensaje-error" role="alert">{error}</p>}
+      <section className="tarjeta" aria-labelledby="titulo-nuevo-proyecto">
+        <h2 id="titulo-nuevo-proyecto">Nuevo proyecto</h2>
+        <form className="formulario en-linea" onSubmit={enviar}>
+          <label htmlFor="nombre-proyecto">Nombre del proyecto</label>
+          <input
+            id="nombre-proyecto"
+            type="text"
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+            maxLength={120}
+            required
+          />
+          <button className="boton" type="submit" disabled={guardando || nombre.trim() === ""}>
+            {guardando ? "Creando…" : "Crear proyecto"}
+          </button>
+        </form>
+        {error !== null && <p className="mensaje-error" role="alert">{error}</p>}
+      </section>
 
       {proyectos === null && error === null && <p className="texto-secundario">Cargando…</p>}
 
       {proyectos !== null && proyectos.length === 0 && (
-        <p className="texto-secundario">Todavía no hay proyectos. Cree el primero.</p>
+        <section className="vacio" aria-live="polite">
+          <h2>Todavía no hay proyectos</h2>
+          <p className="texto-secundario">
+            Cree el primero con el formulario de arriba. Después podrá importar videos dentro de él.
+          </p>
+        </section>
       )}
 
       {proyectos !== null && proyectos.length > 0 && (
-        <ul className="lista">
-          {proyectos.map((proyecto) => (
-            <li key={proyecto.id}>
-              <Link href={`/proyectos/${proyecto.id}`}>{proyecto.nombre}</Link>
-              <span className="texto-secundario"> · creado el {formatearFecha(proyecto.creado)}</span>
-            </li>
-          ))}
-        </ul>
+        <section aria-labelledby="titulo-lista-proyectos" className="seccion-proyectos">
+          <h2 id="titulo-lista-proyectos" className="titulo-seccion">
+            Sus proyectos
+          </h2>
+          <ul className="cuadricula-proyectos">
+            {proyectos.map((proyecto) => (
+              <li key={proyecto.id}>
+                <Link href={`/proyectos/${proyecto.id}`} className="tarjeta-proyecto">
+                  <span className="nombre-proyecto">{proyecto.nombre}</span>
+                  <span className={`insignia ${proyecto.cantidad_videos > 0 ? "acento" : "neutral"}`}>
+                    {textoVideos(proyecto.cantidad_videos)}
+                  </span>
+                  <span className="texto-secundario">
+                    Creado el {formatearFecha(proyecto.creado)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
-    </section>
+    </>
   );
+}
+
+function textoVideos(cantidad: number): string {
+  if (cantidad === 0) return "Sin videos";
+  return cantidad === 1 ? "1 video" : `${cantidad} videos`;
 }
 
 function mensajeDe(error: unknown): string {

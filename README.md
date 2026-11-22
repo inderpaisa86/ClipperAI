@@ -6,6 +6,8 @@ Todo el procesamiento ocurre en tu equipo. Ningún video se sube a servicios ext
 
 **Estado:** Fase 1 en curso. Hay backend, frontend y gestión inicial de videos (registro, metadatos, previsualización y eliminación de registros). El análisis todavía no está implementado.
 
+**Datos de desarrollo:** los proyectos y videos registrados en `data/clipperai.db` son de pruebas. No se deben borrar ni recrear la base sin decidirlo antes.
+
 ## Requisitos
 
 - Windows 11 de 64 bits.

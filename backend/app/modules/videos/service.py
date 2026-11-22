@@ -21,6 +21,31 @@ EXTENSIONES_ADMITIDAS: dict[str, str] = {
 }
 
 
+def _es_enlace(ruta: Path) -> bool:
+    """Enlace simbólico, o junction de Windows (que no requiere privilegios para crearse)."""
+    if ruta.is_symlink():
+        return True
+    es_junction = getattr(ruta, "is_junction", None)
+    return es_junction is not None and es_junction()
+
+
+def _contiene_enlaces(ruta: Path) -> bool:
+    """True si la ruta o cualquiera de sus directorios padre es un enlace.
+
+    Un enlace en un directorio intermedio podría redirigir la lectura a un archivo distinto
+    del que el usuario eligió. Por eso se revisa toda la cadena, hasta la raíz.
+    """
+    return any(_es_enlace(parte) for parte in (ruta, *ruta.parents))
+
+
+def _archivo_accesible(ruta: Path) -> bool:
+    """Archivo regular existente sin enlaces en su ruta. Se evalúa en cada uso, no solo al importar."""
+    try:
+        return ruta.is_file() and not _contiene_enlaces(ruta)
+    except OSError:
+        return False
+
+
 def validar_ruta_entrada(texto: str) -> Path:
     """Valida una ruta escrita por el usuario o devuelta por el selector nativo.
 
@@ -39,6 +64,9 @@ def validar_ruta_entrada(texto: str) -> Path:
     ruta = Path(limpia)
     if not ruta.is_absolute():
         raise SolicitudInvalida("La ruta debe ser absoluta.")
+    if ".." in ruta.parts:
+        # Con '..' después de un enlace, el sistema resuelve una ruta distinta de la que se ve.
+        raise SolicitudInvalida("La ruta no puede contener '..'.")
 
     extension = ruta.suffix.lower()
     if extension not in EXTENSIONES_ADMITIDAS:
@@ -52,9 +80,10 @@ def validar_ruta_entrada(texto: str) -> Path:
     except OSError as error:
         raise SolicitudInvalida("No se puede acceder al archivo.") from error
 
-    if stat.S_ISLNK(estado.st_mode):
+    if _contiene_enlaces(ruta):
         raise SolicitudInvalida(
-            "No se admiten enlaces simbólicos. Seleccione el archivo original."
+            "No se admiten enlaces simbólicos ni accesos directos en la ruta. "
+            "Seleccione el archivo original."
         )
     if not stat.S_ISREG(estado.st_mode):
         raise SolicitudInvalida("La ruta no corresponde a un archivo.")
@@ -84,7 +113,7 @@ def _a_respuesta(fila: sqlite3.Row) -> VideoRespuesta:
         codec_video=fila["codec_video"],
         codec_audio=fila["codec_audio"],
         formato=fila["formato"],
-        disponible=Path(fila["ruta_original"]).is_file(),
+        disponible=_archivo_accesible(Path(fila["ruta_original"])),
         creado=fila["creado"],
     )
 
@@ -137,6 +166,19 @@ def obtener(conexion: sqlite3.Connection, video_id: int) -> VideoRespuesta:
     return _a_respuesta(fila)
 
 
+def contar_por_proyecto(conexion: sqlite3.Connection, proyecto_id: int) -> int:
+    """Servicio público para otros módulos. Cuenta los videos de un proyecto."""
+    return repository.contar_por_proyecto(conexion, proyecto_id)
+
+
+def contar_por_proyectos(conexion: sqlite3.Connection) -> dict[int, int]:
+    """Servicio público para otros módulos. Devuelve {proyecto_id: cantidad} en una sola consulta."""
+    return {
+        int(fila["proyecto_id"]): int(fila["cantidad"])
+        for fila in repository.contar_por_proyectos(conexion)
+    }
+
+
 def eliminar(conexion: sqlite3.Connection, video_id: int) -> None:
     if not repository.eliminar(conexion, video_id):
         raise NoEncontrado("El video no existe.")
@@ -149,7 +191,7 @@ def ruta_para_transmision(conexion: sqlite3.Connection, video_id: int) -> tuple[
         raise NoEncontrado("El video no existe.")
 
     ruta = Path(fila["ruta_original"])
-    if not ruta.is_file():
+    if not _archivo_accesible(ruta):
         raise NoEncontrado("El archivo original ya no está disponible.")
 
     tipo = EXTENSIONES_ADMITIDAS.get(ruta.suffix.lower(), "application/octet-stream")

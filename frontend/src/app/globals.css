@@ -6,6 +6,7 @@
   --texto: #e8eaf0;
   --texto-secundario: #9aa3b5;
   --acento: #7c5cff;
+  --cian: #22d3ee;
   --ok: #34d399;
   --aviso: #fbbf24;
   --error: #f87171;
@@ -51,35 +52,92 @@ body {
 
 .navegacion {
   display: flex;
-  gap: 1.25rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin: 0;
   padding: 0;
   list-style: none;
   font-size: 0.95rem;
 }
 
-.navegacion a {
+.navegacion a,
+.navegacion a:visited {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
   color: var(--texto-secundario);
   text-decoration: none;
-}
-
-.navegacion a[aria-current="page"] {
-  color: var(--texto);
-  border-bottom: 2px solid var(--acento);
-  padding-bottom: 2px;
+  transition: color 0.15s, background-color 0.15s, border-color 0.15s;
 }
 
 .navegacion a:hover {
   color: var(--texto);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.navegacion a[aria-current="page"] {
+  color: var(--texto);
+  font-weight: 600;
+  background: linear-gradient(135deg, rgba(124, 92, 255, 0.28), rgba(34, 211, 238, 0.14));
+  border-color: rgba(124, 92, 255, 0.6);
+}
+
+.navegacion a[aria-current="page"]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-right: 0.5rem;
+  border-radius: 50%;
+  background: var(--cian);
 }
 
 .proximamente {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.9rem;
+  border: 1px dashed var(--borde);
+  border-radius: 999px;
   color: var(--neutral);
   cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.proximamente:focus-visible {
+  outline: 2px solid var(--cian);
+  outline-offset: 2px;
+}
+
+.proximamente .globo {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 50%;
+  z-index: 10;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  border-radius: 6px;
+  background: var(--superficie);
+  color: var(--cian);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, -4px);
+  transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+}
+
+.proximamente:hover .globo,
+.proximamente:focus-visible .globo {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
 }
 
 .contenedor {
-  max-width: 880px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 3rem 2rem;
   display: grid;
@@ -324,6 +382,123 @@ a:focus-visible {
   font-size: 0.85rem;
 }
 
+.encabezado-pagina {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.encabezado-pagina h1 {
+  margin: 0 0 0.35rem;
+  font-size: 2rem;
+}
+
+.encabezado-pagina p {
+  margin: 0;
+  max-width: 60ch;
+}
+
+.resumen {
+  display: flex;
+  gap: 1rem;
+  margin: 0;
+}
+
+.estadistica {
+  min-width: 130px;
+  padding: 0.9rem 1.1rem;
+  background: linear-gradient(160deg, rgba(124, 92, 255, 0.16), rgba(34, 211, 238, 0.06));
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+}
+
+.estadistica dt {
+  color: var(--texto-secundario);
+  font-size: 0.85rem;
+}
+
+.estadistica dd {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--texto);
+}
+
+.titulo-seccion {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+}
+
+.cuadricula-proyectos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tarjeta-proyecto {
+  position: relative;
+  display: grid;
+  gap: 0.75rem;
+  height: 100%;
+  padding: 1.25rem 1.25rem 1.1rem;
+  overflow: hidden;
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+  color: var(--texto);
+  text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.tarjeta-proyecto::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--acento), var(--cian));
+}
+
+.tarjeta-proyecto:hover {
+  border-color: rgba(124, 92, 255, 0.6);
+  box-shadow: 0 8px 24px rgba(124, 92, 255, 0.12);
+  transform: translateY(-2px);
+}
+
+.nombre-proyecto {
+  font-size: 1.1rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.vacio {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  padding: 2.5rem 1.5rem;
+  border: 1px dashed var(--borde);
+  border-radius: 12px;
+  text-align: left;
+}
+
+.vacio h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.vacio p {
+  margin: 0;
+}
+
+.insignia.acento {
+  color: var(--cian);
+  border-color: rgba(34, 211, 238, 0.5);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -346,5 +521,15 @@ a:focus-visible {
 
   .contenedor {
     padding: 2rem 1rem;
+  }
+  .navegacion {
+    width: 100%;
+    justify-content: space-between;
+    gap: 0.35rem;
+    font-size: 0.875rem;
+  }
+  .navegacion a,
+  .proximamente {
+    padding: 0.35rem 0.55rem;
   }
 }
