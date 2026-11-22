@@ -28,6 +28,8 @@ const DESTINOS_PERMITIDOS: readonly DestinoPermitido[] = [
   { metodo: "GET", patron: /^videos\/\d+$/ },
   { metodo: "DELETE", patron: /^videos\/\d+$/ },
   { metodo: "GET", patron: /^videos\/\d+\/stream$/ },
+  { metodo: "GET", patron: /^jobs\/\d+$/ },
+  { metodo: "POST", patron: /^jobs\/\d+\/cancelacion$/ },
 ];
 
 export type ResultadoDestino =

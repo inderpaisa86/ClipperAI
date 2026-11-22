@@ -357,3 +357,233 @@ Si el original se mueve o se borra después de importarlo, el video aparece como
 - Un pool de conexiones compartido. No hace falta para una aplicación local de un solo usuario y añade estado compartido.
 
 **Consecuencias.** Un cambio futuro que comparta una conexión entre peticiones o entre hilos a la vez rompe el invariante. `backend/tests/test_conexion.py` reproduce el fallo original (crear y cerrar en hilos distintos, usar la conexión desde otro hilo) y verifica el cierre también ante errores.
+
+---
+
+## D-029. Cola de trabajos en SQLite con proceso hijo por trabajo
+**Fecha:** Módulo 2, Etapa 0
+**Estado:** Aprobada por el usuario. Implementación en la Etapa 1.
+
+**Contexto.** La arquitectura situaba la cola en la Fase 2, pero no existía. Es prerrequisito del análisis de audio y video.
+
+**Decisión.**
+
+- Tablas `trabajos` y `segmentos_trabajo` en la migración 0003. Estados según la arquitectura, sección 9.1.
+- **Reclamo atómico.** El worker toma un trabajo con `BEGIN IMMEDIATE` y `UPDATE ... WHERE id = ? AND estado = 'en_cola'`. Solo cuenta si la actualización afecta una fila. Al reclamar, guarda un `claim_token` (UUID aleatorio), el PID del proceso hijo y su hora de creación.
+- **Token de ejecución (fencing).** Toda actualización de `trabajos` o `segmentos_trabajo` exige el `claim_token` vigente. Un proceso que perdió su reclamo no puede confirmar resultados.
+- **Un trabajo pesado a la vez.** El worker reclama de a uno. Además, mantiene un bloqueo exclusivo del sistema operativo sobre `data/runtime/worker.lock`, para que dos instancias del backend no ejecuten trabajos a la vez. El bloqueo se implementa en `core/plataforma.py`.
+- **Recuperación.** Antes de devolver un trabajo a `en_cola`, el sistema termina el proceso registrado. Verifica antes el PID y la hora de creación, para no matar un proceso reutilizado por el sistema. Si no logra terminarlo, el trabajo pasa a `fallido` con un error controlado y no se reasigna.
+- **Gestión de procesos.** En Windows, el proceso hijo y su FFmpeg se asocian a un Job Object con `KILL_ON_JOB_CLOSE`, de modo que el cierre del padre los termina. En macOS y Linux se usa un grupo de procesos (`start_new_session` y `killpg`). Ambas implementaciones quedan detrás de `core/plataforma.py`.
+- **Cancelación.** La API marca `cancelacion_solicitada`. El proceso hijo la revisa cada 10 segundos de video procesado o al cerrar cada bloque, no solo entre segmentos.
+- **Latido.** El hijo actualiza `latido` cada 10 segundos. Un latido de más de 60 segundos se considera perdido.
+
+**Alternativas descartadas.**
+
+- Ejecutar el análisis en un hilo del proceso de la API. La memoria no se libera al terminar y un fallo de FFmpeg puede afectar a la API.
+- Confiar solo en el estado de la base de datos, sin token de ejecución. Un proceso zombi podría confirmar resultados después de que otro proceso reasignó el trabajo.
+
+**Consecuencias.** La garantía de no ejecución doble tiene tres capas: el reclamo atómico, el bloqueo del worker y el token. Un cambio que omita cualquiera de ellas rompe la garantía.
+
+---
+
+## D-030. Audio mediante tubería PCM sin WAV persistente
+**Fecha:** Módulo 2, Etapa 0
+**Estado:** Aprobada por el usuario.
+
+**Decisión.**
+
+- FFmpeg entrega PCM `s16le`, mono, 16 kHz, por la salida estándar. Python lee bloques de 1 MiB y calcula la energía RMS en ventanas de 200 ms.
+- No se escribe WAV. Si la Fase 3 necesita WAV para faster-whisper, se genera entonces.
+- Los silencios y la actividad se derivan de la serie de energía en un paso de consolidación al final, cuando ya están todos los segmentos. Así el umbral usa el video completo.
+- Las invocaciones de FFmpeg usan `-nostdin`, `-protocol_whitelist file,pipe` y lista de argumentos. El stderr se escribe en un archivo temporal con tamaño máximo, para que nunca bloquee la tubería.
+
+**Medición (Etapa 0).** Clip sintético de 120 s, 1080p, 60 fps. Audio completo en 0,15 s con 8 hilos. Cálculo estimado para una hora: unos 5 s.
+
+---
+
+## D-031. Video decodificado por FFmpeg y analizado con OpenCV
+**Fecha:** Módulo 2, Etapa 0
+**Estado:** Aprobada por el usuario.
+
+**Decisión.**
+
+- FFmpeg decodifica, reduce la tasa a 4 fps y escala a 320×180 en gris (rawvideo por tubería). OpenCV analiza en 160×90 y calcula escenas, movimiento y brillo.
+- Se descarta `cv2.VideoCapture`. En Windows no maneja bien las rutas no ASCII, y no permite controlar la escala ni la tasa de muestreo durante la decodificación.
+- Las miniaturas se codifican con `cv2.imencode` y se escriben con `pathlib`, no con `cv2.imwrite`, que falla con rutas no ASCII en Windows.
+- Hilos de FFmpeg configurables. El valor por defecto se fija con la medición de la Etapa 0 y no se asume.
+- La decodificación por hardware (QSV) no se usa en esta fase. En la medición fue más lenta (28,1 s frente a 15,5 s por CPU), porque obliga a descargar los fotogramas a memoria del sistema. Se revisa en otra fase con otra medición.
+
+**Medición (Etapa 0).** Mismo clip de 120 s. Tiempo del flujo de video completo: 8,7 s con 8 hilos, 15,0 s con 4 y 21,8 s con 2. Decodificación sola con 4 hilos: 15,5 s. Con 4 hilos, el pico de memoria del FFmpeg hijo fue de 81 MB. El pico del proceso Python fue de 40 MB con 8 hilos, incluidos NumPy y OpenCV.
+
+---
+
+## D-032. Confirmación por segmento y recuperación de miniaturas
+**Fecha:** Módulo 2, Etapa 0. Revisada a petición del usuario.
+**Estado:** Aprobada por el usuario. Reemplaza, solo para señales y fotogramas, la verificación por archivo de salida de D-015.
+
+**Decisión.** Secuencia por segmento:
+
+1. Commit: el segmento pasa a `procesando` con el `claim_token`.
+2. Análisis del segmento, sin escritura en base de datos.
+3. Cada miniatura se escribe en `*.tmp` y se renombra con `os.replace`. El nombre es determinista: `data/work/<video_id>/fotogramas/<tiempo_ms>.jpg`.
+4. Una sola transacción inserta las señales y las filas de `fotogramas`, y marca el segmento como `completado`. Verifica el `claim_token` en esa misma transacción.
+
+**Recuperación cuando la miniatura existe, pero la transacción no llegó a confirmarse.**
+
+- SQLite confirma o descarta la transacción completa. Nunca quedan señales ni filas parciales.
+- El segmento sigue en `procesando`. Al recuperar, vuelve a `pendiente` y se reprocesa.
+- Si el reprocesamiento genera un fotograma con el mismo `tiempo_ms`, sobrescribe el archivo anterior.
+- Un archivo que quedó sin fila asociada se borra en un barrido previo a cada análisis del video. El barrido elimina en `data/work/<video_id>/fotogramas/` los archivos que no tienen fila en `fotogramas`. Solo corre cuando no hay otro trabajo activo, porque un único trabajo pesado está en ejecución a la vez (D-029).
+- Si la confirmación falla por una excepción de Python, el proceso borra en su mismo flujo las miniaturas que escribió en ese segmento. Es un intento de limpieza, no una garantía. El barrido es la garantía.
+- Al recuperar, un segmento `completado` se verifica contra sus filas. Si falta un archivo referenciado, el segmento vuelve a `pendiente`.
+
+**Consecuencias.** La base de datos es el punto de verdad. Un archivo huérfano ocupa espacio hasta el siguiente barrido, pero nunca aparece en la API.
+
+---
+
+## D-033. Tiempos en milisegundos enteros
+**Fecha:** Módulo 2, Etapa 0
+**Estado:** Aprobada por el usuario.
+
+**Decisión.** Los campos `inicio_ms`, `fin_ms` y `tiempo_ms` son enteros en SQLite y en la API. La arquitectura no fijaba unidad. Los enteros evitan errores de redondeo al comparar intervalos y al unir segmentos.
+
+---
+
+## D-034. Módulo `analisis` como dueño de sus datos
+**Fecha:** Módulo 2, Etapa 0
+**Estado:** Aprobada por el usuario.
+
+**Decisión.**
+
+- `modules/analisis/` es dueño de las tablas `analisis`, `senales` y `fotogramas`. Su migración es la 0004.
+- `modules/audio/` y `modules/vision/` no tienen tablas, router ni repositorio. Implementan el contrato de `plugins/` y devuelven señales. Solo `analisis` escribe en la base de datos (D-012).
+- `senales` referencia `analisis_id` en lugar de guardar el nombre del analizador. Así cada señal pertenece a una versión concreta del análisis.
+- Clave `UNIQUE (video_id, analizador)` en `analisis`.
+- Las claves externas con `ON DELETE CASCADE` son red de seguridad. El borrado real pasa por `analisis.service`, que también elimina archivos de `data/work/`.
+
+---
+
+## D-035. Dependencias de análisis: OpenCV headless y NumPy
+**Fecha:** Módulo 2, Etapa 0
+**Estado:** Aprobada por el usuario. Instalada en Etapa 0.
+
+**Decisión.**
+
+- Se agregan `opencv-python-headless` (5.1.0.95) y `numpy` (2.5.5) a `backend/pyproject.toml`. El lock queda en `backend/uv.lock`.
+- No se instalan PyTorch ni faster-whisper en este módulo.
+- No hay dependencias CUDA ni NVIDIA en el lock. El build de OpenCV reporta OpenCL, pero no CUDA.
+
+**Verificado en Etapa 0.**
+
+- `uv lock --check` pasa.
+- Las ruedas incluyen Windows x64 (`win_amd64`), macOS arm64 (`macosx_15_0_arm64`) y macOS x86_64 (`macosx_15_0_x86_64`).
+- La suite existente pasa completa: 106 pruebas, con 1 omitida por el enlace simbólico sin privilegios.
+
+**Riesgo abierto.** Las ruedas de OpenCV para macOS requieren macOS 15 o posterior. Un Mac Intel con una versión anterior no tendrá rueda y uv intentaría compilar desde el código fuente. Eso no está verificado y bloquea el soporte de macOS Intel en este módulo. Se verifica cuando exista un equipo macOS disponible (D-017).
+
+---
+
+## D-036. Ampliación del proxy para análisis
+**Fecha:** Módulo 2, Etapa 0
+**Estado:** Aprobada por el usuario. Amplía D-026.
+
+**Decisión.**
+
+- Los parámetros `inicio_ms`, `fin_ms` y `limite` aceptan enteros mayores o iguales a cero. D-026 solo admitía positivos.
+- El parámetro `tipo` tiene una lista cerrada de valores admitidos, que se valida en `lib/proxy/destinos.ts`.
+- Las respuestas de imagen (`image/jpeg`) se reenvían solo para el destino de miniaturas. La lista blanca fija ese tipo de contenido para ese destino.
+- Cada endpoint nuevo tiene su entrada en la lista blanca, con método y parámetros explícitos.
+
+---
+
+## D-037. Worker en el proceso de la API con bloqueo exclusivo
+**Fecha:** Módulo 2, Etapa 1
+**Estado:** Aprobada por el usuario al autorizar la Etapa 1.
+
+**Decisión.**
+
+- El worker es un hilo que el ciclo de vida de la aplicación arranca después de las migraciones. Se controla con `Configuracion.iniciar_trabajos` (por defecto activo). Las pruebas del cliente HTTP lo desactivan.
+- Antes de ejecutar nada, el worker adquiere `data/runtime/worker.lock` con `plataforma.BloqueoExclusivo`: `msvcrt.locking` en Windows y `fcntl.flock` en POSIX. Si el bloqueo está ocupado, el proceso no ejecuta trabajos.
+- El sistema operativo libera el bloqueo cuando el proceso termina, también ante una caída.
+- Los trabajos pesados se ejecutan en procesos hijos (D-040). El worker solo supervisa, así que el hilo no realiza cálculo pesado.
+- Los tipos `diagnostico_*` existen para verificar la infraestructura. No se pueden crear desde la API. Solo `service.crear`, llamado desde código del servidor, crea trabajos.
+
+**Alternativa descartada.** Un worker en proceso separado. Añade gestión de procesos, y el trabajo pesado ya corre en un hijo.
+
+---
+
+## D-038. Reclamo atómico, token de ejecución e invariante de un trabajo activo
+**Fecha:** Módulo 2, Etapa 1
+**Estado:** Aprobada por el usuario al autorizar la Etapa 1.
+
+**Decisión.**
+
+- El reclamo se hace con `BEGIN IMMEDIATE` y un `UPDATE` condicionado a `estado = 'en_cola'` y a que no exista otro trabajo `ejecutando`. Solo cuenta si la actualización afecta una fila.
+- Cada ejecución recibe un `claim_token` aleatorio de 128 bits. Latidos, progreso, confirmaciones de segmento, completado, fallo, cancelación y reencolado exigen ese token. Si no coincide, lanzan `ReclamoPerdido`.
+- La tabla tiene un `CHECK` que relaciona `estado = 'ejecutando'` con `claim_token IS NOT NULL`. Una fila inconsistente no se puede guardar.
+- Las pruebas cubren reclamo concurrente con ocho hilos, la imposibilidad de tener dos trabajos ejecutándose, y el rechazo de un token ajeno.
+
+---
+
+## D-039. Identidad de procesos y terminación verificada
+**Fecha:** Módulo 2, Etapa 1
+**Estado:** Aprobada por el usuario al autorizar la Etapa 1.
+
+**Decisión.**
+
+- La identidad de un proceso es su PID más su hora de creación. En Windows se lee con `GetProcessTimes`. En POSIX se lee con `ps -o lstart=` y `LC_ALL=C`.
+- Un proceso solo se termina si su identidad actual coincide con la registrada. Si el PID se reutilizó, no se toca.
+- En Windows, los descendientes se terminan solo si su hora de creación es igual o posterior a la del proceso raíz.
+- El proceso hijo se registra a sí mismo con `os.getpid()`. En Windows, el intérprete de `venv` es un lanzador que crea el intérprete real como hijo, así que registrar el PID del lanzador daría una identidad incorrecta.
+- Un trabajo sin PID registrado no se termina ni se reencola hasta que su latido supere el umbral de 60 s (D-042).
+
+---
+
+## D-040. Gestión de procesos con Job Objects y grupos de procesos
+**Fecha:** Módulo 2, Etapa 1
+**Estado:** Aprobada por el usuario al autorizar la Etapa 1. La rama POSIX no se ha verificado en macOS ni en Linux.
+
+**Decisión.**
+
+- **Windows.** El proceso hijo se crea con `CREATE_SUSPENDED | CREATE_NO_WINDOW`. Después se asigna a un Job Object con `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, y se reanudan sus hilos. Cuando se cierra el último handle del job, el sistema termina todo lo que contiene. Si el backend cae, el sistema cierra el job y los procesos hijos desaparecen.
+- **POSIX.** El proceso se lanza con `start_new_session=True`. El grupo se termina con `os.killpg` y `SIGKILL`.
+- Al terminar un trabajo, el grupo se cierra: cualquier descendiente que siga vivo se termina. Así no quedan procesos huérfanos.
+- Un proceso hijo que pierde su reclamo o que detecta que su padre ya no existe se termina con `os._exit`. En POSIX también mata su grupo.
+- Toda la lógica del sistema operativo está en `core/plataforma.py`, según D-017.
+
+---
+
+## D-041. Cancelación idempotente y confirmaciones bloqueadas
+**Fecha:** Módulo 2, Etapa 1
+**Estado:** Aprobada por el usuario al autorizar la Etapa 1.
+
+**Decisión.**
+
+- Un trabajo en cola pasa a `cancelado`. Un trabajo en ejecución recibe `cancelacion_solicitada = 1`. Un trabajo en estado final no cambia.
+- El proceso hijo detecta la cancelación en su latido (cada 10 s) o en cada verificación de su tarea. El worker también la vigila: si el hijo no sale en 15 s, termina el grupo.
+- Completar un trabajo y confirmar un segmento exigen `cancelacion_solicitada = 0`. Un resultado tardío de un trabajo cancelado no se escribe.
+- Cancelar dos veces produce el mismo resultado.
+
+---
+
+## D-042. Recuperación de trabajos interrumpidos
+**Fecha:** Módulo 2, Etapa 1
+**Estado:** Aprobada por el usuario al autorizar la Etapa 1.
+
+**Decisión.**
+
+- La recuperación corre al arrancar y cada 10 s cuando el worker está inactivo.
+- Si el trabajo tiene PID e identidad registrados y el proceso sigue vivo, se termina primero. Si no logra terminarse, el trabajo se deja como está y se registra el error.
+- Si el PID ya no existe o la identidad cambió, el trabajo se reencola de inmediato, siempre con el token observado.
+- Si no hay PID registrado, el trabajo se reencola solo cuando su latido supera 60 s.
+- Un trabajo con cancelación pendiente pasa a `cancelado`. Uno que ya se interrumpió 3 veces pasa a `fallido`.
+- Los segmentos en `procesando` vuelven a `pendiente` al reencolar, o pasan a `fallido` si el trabajo termina.
+- Al detener el backend de forma ordenada, el trabajo en curso vuelve a cola. No cuenta como fallo, aunque sí consume un intento.
+
+---
+
+## D-043. FFprobe con restricción de protocolos
+**Fecha:** Módulo 2, Etapa 1
+**Estado:** Aprobada por el usuario. Amplía D-024 en la parte de seguridad del Módulo 1.
+
+**Decisión.** Cada invocación de FFprobe usa `-protocol_whitelist file`. Así un nombre con esquema, como `concat:` o `http:`, no puede leer otra fuente. Las pruebas comprueban que el argumento está antes de `-i` y que la lectura de un archivo local sigue funcionando.

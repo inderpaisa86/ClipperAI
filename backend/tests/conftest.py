@@ -17,7 +17,8 @@ requiere_ffmpeg = pytest.mark.skipif(
 
 @pytest.fixture
 def configuracion(tmp_path: Path) -> Configuracion:
-    return Configuracion(data_dir=tmp_path / "datos")
+    # El worker se desactiva en el cliente de pruebas. Las pruebas de trabajos lo arrancan a mano.
+    return Configuracion(data_dir=tmp_path / "datos", iniciar_trabajos=False)
 
 
 @pytest.fixture

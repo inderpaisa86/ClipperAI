@@ -12,9 +12,12 @@ from app.core.configuracion import (
     cargar_configuracion,
 )
 from app.core.errores import ErrorAplicacion
+from app.core.rutas import RaizDatos
 from app.core.seguridad import escribir_token, generar_token, token_valido
 from app.db.conexion import conectar
 from app.db.migraciones import aplicar_migraciones
+from app.jobs.router import router as router_trabajos
+from app.jobs.worker import Worker
 from app.modules.projects.router import router as router_proyectos
 from app.modules.sistema.router import router as router_sistema
 from app.modules.videos.router import router as router_videos
@@ -39,9 +42,20 @@ def crear_aplicacion(configuracion: Configuracion | None = None) -> FastAPI:
         escribir_token(config.ruta_token, token)
         app.state.configuracion = config
         app.state.token = token
+        worker: Worker | None = None
+        if config.iniciar_trabajos:
+            worker = Worker(
+                config.ruta_base_datos,
+                config.ruta_bloqueo_worker,
+                RaizDatos(config.data_dir),
+            )
+            worker.iniciar()
+        app.state.worker = worker
         try:
             yield
         finally:
+            if worker is not None:
+                worker.detener()
             config.ruta_token.unlink(missing_ok=True)
 
     app = FastAPI(title="ClipperAI", version="0.1.0", lifespan=ciclo_de_vida)
@@ -82,6 +96,7 @@ def crear_aplicacion(configuracion: Configuracion | None = None) -> FastAPI:
     app.include_router(router_sistema, prefix=PREFIJO_API)
     app.include_router(router_proyectos, prefix=PREFIJO_API)
     app.include_router(router_videos, prefix=PREFIJO_API)
+    app.include_router(router_trabajos, prefix=PREFIJO_API)
     return app
 
 

@@ -16,6 +16,7 @@ class Configuracion(BaseSettings):
     data_dir: Path = RAIZ_REPOSITORIO / "data"
     ffmpeg: Path | None = None
     ffprobe: Path | None = None
+    iniciar_trabajos: bool = True
 
     @property
     def ruta_base_datos(self) -> Path:
@@ -24,6 +25,10 @@ class Configuracion(BaseSettings):
     @property
     def ruta_token(self) -> Path:
         return self.data_dir / "runtime" / "sesion.token"
+
+    @property
+    def ruta_bloqueo_worker(self) -> Path:
+        return self.data_dir / "runtime" / "worker.lock"
 
 
 def cargar_configuracion() -> Configuracion:

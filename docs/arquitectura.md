@@ -1,7 +1,7 @@
 # ClipperAI: Arquitectura técnica
 
-**Versión:** 1.5
-**Estado:** Fase 1 en curso. Backend, frontend, proxy y Módulo 1 (videos) implementados. Pendiente de aprobación el siguiente módulo.
+**Versión:** 1.6
+**Estado:** Fase 1 completa (backend, frontend, proxy y Módulo 1 de videos). Módulo 2 en curso: cola de trabajos implementada (Etapa 1). Pendiente de autorización la Etapa 2.
 **Tipo:** Aplicación local de edición inteligente de video.
 
 Las decisiones con su fecha y contexto están en `docs/decisiones.md`. Este documento describe cómo se aplican.
@@ -241,6 +241,17 @@ Al arrancar el backend:
 
 Así, ante un apagón de Windows, se reprocesan únicamente los segmentos que no terminaron de forma verificable.
 
+### 9.4 Implementación de la cola (Módulo 2, Etapa 1)
+
+Código en `backend/app/jobs/` y `backend/app/core/plataforma.py`. Decisiones D-037 a D-043.
+
+- **Worker.** Hilo dentro del proceso de la API, arrancado por el ciclo de vida. Solo ejecuta trabajos si adquiere `data/runtime/worker.lock`. Un trabajo a la vez.
+- **Proceso hijo.** Cada trabajo corre en `python -m app.jobs.ejecutar`. En Windows, el hijo se asocia a un Job Object con `KILL_ON_JOB_CLOSE`. En POSIX, a un grupo de procesos.
+- **Propiedad.** El reclamo es atómico. Cada ejecución tiene un `claim_token`. Un proceso que perdió el token no puede escribir resultados.
+- **Cancelación.** Idempotente. Un trabajo cancelado no confirma resultados.
+- **Recuperación.** Un proceso se termina solo si su PID y su hora de creación coinciden. Sin PID, el trabajo espera al umbral de latido de 60 s.
+- **Endpoints.** `GET /api/v1/jobs/{id}` y `POST /api/v1/jobs/{id}/cancelacion` (202). No hay endpoint de creación.
+
 ## 10. Perfiles de análisis
 
 - Un perfil es un archivo JSON en `backend/app/perfiles/`, validado con Pydantic al arrancar.
@@ -273,8 +284,8 @@ data/
 
 - `proyectos`: id, nombre, perfil_id, formato_salida, creado.
 - `videos`: implementada en la migración 0002 con id, proyecto_id, nombre, ruta_original, tamano_bytes, duracion_segundos, ancho, alto, fps, codec_video, codec_audio, formato y creado. Las columnas `modo` y `ruta_gestionada` llegarán con la copia gestionada (D-023).
-- `trabajos`: id, tipo, estado, progreso, payload_json, cancelacion_solicitada, intentos, latido, error, creado, actualizado.
-- `segmentos_trabajo`: id, trabajo_id, tipo_analisis, indice, inicio, fin, estado, salida_ruta, salida_tamano, version_analizador.
+- `trabajos` (migración 0003): id, tipo, estado, progreso, payload_json, cancelacion_solicitada, intentos, claim_token, pid, identidad_proceso, latido, error, creado, actualizado. `claim_token` solo existe mientras el trabajo está `ejecutando`.
+- `segmentos_trabajo` (migración 0003): id, trabajo_id, tipo_analisis, indice, inicio_ms, fin_ms, estado, salida_ruta, salida_tamano, version_analizador. Única por `(trabajo_id, tipo_analisis, indice)`, para que audio y video puedan compartir índice dentro del mismo trabajo.
 - `senales`: id, video_id, analizador, tipo, inicio, fin, valor (0 a 1), confianza.
 - `transcripciones`: id, video_id, inicio, fin, texto, idioma.
 - `candidatos`: id, video_id, perfil_id, inicio, fin, puntuacion, estado (`pendiente`, `aprobado`, `descartado`).

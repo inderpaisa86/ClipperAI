@@ -30,9 +30,11 @@ def leer_metadatos(
     except HerramientaNoDisponible as error:
         raise NoDisponible(str(error)) from error
 
+    # Solo archivos locales: un nombre con esquema (concat:, http:, etc.) no puede leer otra fuente.
     comando = [
         str(ejecutable),
         "-v", "error",
+        "-protocol_whitelist", "file",
         "-print_format", "json",
         "-show_format",
         "-show_streams",
