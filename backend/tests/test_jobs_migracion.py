@@ -19,7 +19,7 @@ def test_migracion_0003_crea_trabajos_y_segmentos(tmp_path):
     try:
         version = aplicar_migraciones(conexion)
         tablas = {fila["name"] for fila in conexion.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert version == 3
+        assert version == 4
         assert {"trabajos", "segmentos_trabajo"} <= tablas
     finally:
         conexion.close()
@@ -37,7 +37,7 @@ def test_migracion_0003_conserva_datos_de_una_base_en_version_2(tmp_path):
 
         version = aplicar_migraciones(conexion)
 
-        assert version == 3
+        assert version == 4
         nombres = [fila["nombre"] for fila in conexion.execute("SELECT nombre FROM proyectos")]
         assert nombres == ["existente"]
     finally:

@@ -179,6 +179,11 @@ def contar_por_proyectos(conexion: sqlite3.Connection) -> dict[int, int]:
     }
 
 
+def existe(conexion: sqlite3.Connection, video_id: int) -> bool:
+    """Servicio público para otros módulos. No revisa si el archivo sigue disponible."""
+    return repository.obtener(conexion, video_id) is not None
+
+
 def eliminar(conexion: sqlite3.Connection, video_id: int) -> None:
     if not repository.eliminar(conexion, video_id):
         raise NoEncontrado("El video no existe.")

@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import Request
@@ -18,6 +19,23 @@ def conectar(ruta: Path) -> sqlite3.Connection:
     conexion.execute("PRAGMA foreign_keys = ON")
     conexion.execute("PRAGMA journal_mode = WAL")
     return conexion
+
+
+@contextmanager
+def transaccion_inmediata(conexion: sqlite3.Connection) -> Iterator[None]:
+    """Transacción con escritura reservada desde el inicio. Dos procesos no escriben a la vez.
+
+    Confirma al salir sin error y deshace todo si la transacción lanza una excepción.
+    Quien la usa no debe llamar a `commit()` dentro: eso cerraría la transacción antes de tiempo.
+    """
+    conexion.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        if conexion.in_transaction:
+            conexion.execute("ROLLBACK")
+        raise
+    conexion.execute("COMMIT")
 
 
 def obtener_conexion(request: Request) -> Iterator[sqlite3.Connection]:

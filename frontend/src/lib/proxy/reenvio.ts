@@ -31,6 +31,8 @@ export type OpcionesReenvio = {
   peticion: Request;
   token: string;
   cuerpo: Uint8Array<ArrayBuffer> | null;
+  /** Si se indica, una respuesta correcta del backend debe tener este tipo de contenido. */
+  tipoEsperado?: string;
 };
 
 export async function reenviarAlBackend(opciones: OpcionesReenvio): Promise<Response> {
@@ -61,6 +63,13 @@ export async function reenviarAlBackend(opciones: OpcionesReenvio): Promise<Resp
     return respuestaJsonError(503, "El backend no está disponible.");
   }
 
+  if (opciones.tipoEsperado !== undefined && respuestaBackend.ok) {
+    const tipoRecibido = (respuestaBackend.headers.get("content-type") ?? "").toLowerCase();
+    if (!tipoRecibido.startsWith(opciones.tipoEsperado)) {
+      await respuestaBackend.body?.cancel();
+      return respuestaJsonError(502, "El backend devolvió un contenido no esperado.");
+    }
+  }
   const cabecerasSalida = new Headers();
   for (const nombre of CABECERAS_SALIDA) {
     const valor = respuestaBackend.headers.get(nombre);

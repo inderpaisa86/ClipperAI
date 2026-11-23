@@ -1,7 +1,7 @@
 # ClipperAI: Arquitectura técnica
 
 **Versión:** 1.6
-**Estado:** Fase 1 completa (backend, frontend, proxy y Módulo 1 de videos). Módulo 2 en curso: cola de trabajos implementada (Etapa 1). Pendiente de autorización la Etapa 2.
+**Estado:** Fase 1 completa (backend, frontend, proxy y Módulo 1 de videos). Módulo 2 en curso: cola de trabajos (Etapa 1) y estructura de análisis con contrato de analizadores y API de consulta (Etapa 2) implementadas. Sin analizadores registrados todavía. Pendiente de autorización la Etapa 3.
 **Tipo:** Aplicación local de edición inteligente de video.
 
 Las decisiones con su fecha y contexto están en `docs/decisiones.md`. Este documento describe cómo se aplican.
@@ -286,7 +286,9 @@ data/
 - `videos`: implementada en la migración 0002 con id, proyecto_id, nombre, ruta_original, tamano_bytes, duracion_segundos, ancho, alto, fps, codec_video, codec_audio, formato y creado. Las columnas `modo` y `ruta_gestionada` llegarán con la copia gestionada (D-023).
 - `trabajos` (migración 0003): id, tipo, estado, progreso, payload_json, cancelacion_solicitada, intentos, claim_token, pid, identidad_proceso, latido, error, creado, actualizado. `claim_token` solo existe mientras el trabajo está `ejecutando`.
 - `segmentos_trabajo` (migración 0003): id, trabajo_id, tipo_analisis, indice, inicio_ms, fin_ms, estado, salida_ruta, salida_tamano, version_analizador. Única por `(trabajo_id, tipo_analisis, indice)`, para que audio y video puedan compartir índice dentro del mismo trabajo.
-- `senales`: id, video_id, analizador, tipo, inicio, fin, valor (0 a 1), confianza.
+- `analisis` (migración 0004): id, video_id, analizador, version_analizador, estado, trabajo_id, error, creado, actualizado. Única por `(video_id, analizador)`.
+- `senales` (migración 0004): id, analisis_id, tipo, inicio_ms, fin_ms, valor (0 a 1), confianza (0 a 1). Única por `(analisis_id, tipo, inicio_ms, fin_ms)`. Véase D-044.
+- `fotogramas` (migración 0004): id, analisis_id, tiempo_ms, ruta_relativa, creado. Única por `(analisis_id, tiempo_ms)`. La imagen está en `data/work/<video_id>/fotogramas/<tiempo_ms>.jpg`.
 - `transcripciones`: id, video_id, inicio, fin, texto, idioma.
 - `candidatos`: id, video_id, perfil_id, inicio, fin, puntuacion, estado (`pendiente`, `aprobado`, `descartado`).
 - `clips`: id, candidato_id, ruta_salida, formato, resolucion, subtitulos.

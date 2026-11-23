@@ -1,7 +1,7 @@
 import json
 import re
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -189,7 +189,6 @@ def cerrar_tras_proceso(
     token: str,
     codigo: int | None,
     deteniendo: bool,
-    max_intentos: int,
 ) -> str:
     """Decide el estado tras salir del proceso hijo, si el hijo no lo dejó cerrado."""
     ahora = ahora_iso()
@@ -202,7 +201,11 @@ def cerrar_tras_proceso(
             repository.cambiar_segmentos_procesando(conexion, trabajo_id, "fallido", ahora)
             return "cancelado"
         if deteniendo:
-            return _reencolar_o_fallar(conexion, trabajo_id, token, fila, max_intentos, ahora)
+            # Parada ordenada: no es un fallo ni un intento real, así que no aplica el límite de intentos.
+            if repository.reencolar_por_parada(conexion, trabajo_id, token, ahora) != 1:
+                return "ya_cerrado"
+            repository.cambiar_segmentos_procesando(conexion, trabajo_id, "pendiente", ahora)
+            return "reencolado"
         mensaje = f"El proceso terminó sin confirmar el resultado (código {codigo})."
         repository.terminar(conexion, trabajo_id, token, "fallido", mensaje, False, ahora)
         repository.cambiar_segmentos_procesando(conexion, trabajo_id, "fallido", ahora)
@@ -268,14 +271,28 @@ def confirmar_segmento(
     salida_ruta: str | None,
     salida_tamano: int | None,
     version_analizador: str | None,
+    persistir: Callable[[sqlite3.Connection], None] | None = None,
 ) -> bool:
-    """Confirma un segmento. Lanza ReclamoPerdido o TrabajoCancelado si el resultado ya no debe escribirse."""
+    """Confirma un segmento. Lanza ReclamoPerdido o TrabajoCancelado si el resultado ya no debe escribirse.
+
+    `persistir` escribe los resultados del segmento (por ejemplo, las señales de un módulo de análisis)
+    dentro de la misma transacción que marca el segmento como completado. Si `persistir` lanza una
+    excepción, se deshacen ambas escrituras. Este módulo no conoce las tablas que escribe `persistir`.
+    """
     with _transaccion(conexion):
         fila = repository.obtener_ejecucion(conexion, trabajo_id, token)
         if fila is None:
             raise ReclamoPerdido()
         if fila["cancelacion_solicitada"]:
             raise TrabajoCancelado()
-        return repository.confirmar_segmento(
+        confirmado = repository.confirmar_segmento(
             conexion, trabajo_id, tipo, indice, salida_ruta, salida_tamano, version_analizador, ahora_iso()
         ) == 1
+        if confirmado and persistir is not None:
+            persistir(conexion)
+        return confirmado
+
+
+def hay_trabajo_ejecutandose(conexion: sqlite3.Connection) -> bool:
+    """True si un trabajo pesado está en curso. Otros módulos lo consultan antes de tareas de mantenimiento."""
+    return repository.hay_ejecucion(conexion)

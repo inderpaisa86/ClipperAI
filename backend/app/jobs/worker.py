@@ -144,7 +144,7 @@ class Worker:
             grupo.cerrar()
 
         resultado = service.cerrar_tras_proceso(
-            conexion, trabajo_id, token, codigo, deteniendo, self._max_intentos
+            conexion, trabajo_id, token, codigo, deteniendo
         )
         log.info("Trabajo %s: %s.", trabajo_id, resultado)
 

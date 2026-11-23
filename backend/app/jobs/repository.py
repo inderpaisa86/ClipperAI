@@ -143,6 +143,18 @@ def reencolar(conexion: sqlite3.Connection, trabajo_id: int, token: str, ahora: 
     return cursor.rowcount
 
 
+def reencolar_por_parada(conexion: sqlite3.Connection, trabajo_id: int, token: str, ahora: str) -> int:
+    """Devuelve a cola tras una parada ordenada. El intento reclamado no cuenta, así que se revierte."""
+    cursor = conexion.execute(
+        "UPDATE trabajos SET estado = 'en_cola', claim_token = NULL, pid = NULL, "
+        "identidad_proceso = NULL, progreso = 0, latido = NULL, "
+        "intentos = MAX(intentos - 1, 0), actualizado = ? "
+        "WHERE id = ? AND claim_token = ? AND estado = 'ejecutando'",
+        (ahora, trabajo_id, token),
+    )
+    return cursor.rowcount
+
+
 def cambiar_segmentos_procesando(
     conexion: sqlite3.Connection, trabajo_id: int, nuevo_estado: str, ahora: str
 ) -> None:

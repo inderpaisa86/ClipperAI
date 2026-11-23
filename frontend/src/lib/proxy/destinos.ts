@@ -1,8 +1,15 @@
 /** Un segmento de ruta solo puede tener letras, números, guion y guion bajo. */
 const SEGMENTO_VALIDO = /^[a-z0-9_-]+$/i;
 
-/** Un valor de consulta permitido: entero positivo sin ceros a la izquierda. */
-const VALOR_ENTERO_POSITIVO = /^[1-9]\d{0,9}$/;
+/** Tipos de valor que admite un parámetro de consulta. Ninguno admite signo ni decimales. */
+export type TipoParametro = "entero_positivo" | "entero_no_negativo";
+
+const VALIDADORES: Readonly<Record<TipoParametro, RegExp>> = {
+  /** Entero positivo sin ceros a la izquierda. */
+  entero_positivo: /^[1-9]\d{0,9}$/,
+  /** Cero o entero positivo sin ceros a la izquierda. */
+  entero_no_negativo: /^(0|[1-9]\d{0,9})$/,
+};
 
 export type MetodoPermitido = "GET" | "POST" | "DELETE";
 
@@ -10,9 +17,14 @@ type DestinoPermitido = {
   metodo: MetodoPermitido;
   /** Coincide con la ruta relativa a /api/v1, sin barras al inicio ni al final. */
   patron: RegExp;
-  /** Parámetros de consulta que el proxy reenvía. Cualquier otro se rechaza. */
-  parametros?: readonly string[];
+  /** Parámetros de consulta que el proxy reenvía, con su tipo de valor. Cualquier otro se rechaza. */
+  parametros?: Readonly<Record<string, TipoParametro>>;
+  /** Tipo de contenido que el backend debe devolver cuando responde con éxito. Si falta, no se fuerza ninguno. */
+  tipoRespuesta?: string;
 };
+
+/** Identificador de analizador: letra inicial, después minúsculas, números o guion bajo. */
+const ANALIZADOR = "[a-z][a-z0-9_]{0,31}";
 
 /**
  * Lista blanca explícita. El proxy solo reenvía lo que aparece aquí.
@@ -22,7 +34,7 @@ const DESTINOS_PERMITIDOS: readonly DestinoPermitido[] = [
   { metodo: "GET", patron: /^salud$/ },
   { metodo: "GET", patron: /^proyectos$/ },
   { metodo: "POST", patron: /^proyectos$/ },
-  { metodo: "GET", patron: /^videos$/, parametros: ["proyecto_id"] },
+  { metodo: "GET", patron: /^videos$/, parametros: { proyecto_id: "entero_positivo" } },
   { metodo: "POST", patron: /^videos$/ },
   { metodo: "POST", patron: /^videos\/seleccion$/ },
   { metodo: "GET", patron: /^videos\/\d+$/ },
@@ -30,10 +42,27 @@ const DESTINOS_PERMITIDOS: readonly DestinoPermitido[] = [
   { metodo: "GET", patron: /^videos\/\d+\/stream$/ },
   { metodo: "GET", patron: /^jobs\/\d+$/ },
   { metodo: "POST", patron: /^jobs\/\d+\/cancelacion$/ },
+  { metodo: "GET", patron: new RegExp(`^videos\\/\\d+\\/analisis$`) },
+  { metodo: "GET", patron: new RegExp(`^videos\\/\\d+\\/analisis\\/${ANALIZADOR}$`) },
+  {
+    metodo: "GET",
+    patron: new RegExp(`^videos\\/\\d+\\/analisis\\/${ANALIZADOR}\\/senales$`),
+    parametros: { inicio_ms: "entero_no_negativo", fin_ms: "entero_no_negativo", limite: "entero_positivo" },
+  },
+  {
+    metodo: "GET",
+    patron: new RegExp(`^videos\\/\\d+\\/analisis\\/${ANALIZADOR}\\/fotogramas$`),
+    parametros: { limite: "entero_positivo" },
+  },
+  {
+    metodo: "GET",
+    patron: new RegExp(`^videos\\/\\d+\\/analisis\\/${ANALIZADOR}\\/fotogramas\\/\\d+\\/miniatura$`),
+    tipoRespuesta: "image/jpeg",
+  },
 ];
 
 export type ResultadoDestino =
-  | { ok: true; rutaBackend: string }
+  | { ok: true; rutaBackend: string; tipoRespuesta?: string }
   | { ok: false; estado: 400 | 404 | 405; motivo: string };
 
 export function resolverDestino(
@@ -56,22 +85,27 @@ export function resolverDestino(
     return { ok: false, estado: 405, motivo: "Método no permitido para este destino." };
   }
 
-  const parametrosValidos = construirConsulta(consulta, destino.parametros ?? []);
+  const parametrosValidos = construirConsulta(consulta, destino.parametros ?? {});
   if (parametrosValidos === null) {
     return { ok: false, estado: 400, motivo: "Parámetros de consulta no válidos." };
   }
 
-  return { ok: true, rutaBackend: `/api/v1/${ruta}${parametrosValidos}` };
+  return {
+    ok: true,
+    rutaBackend: `/api/v1/${ruta}${parametrosValidos}`,
+    ...(destino.tipoRespuesta !== undefined ? { tipoRespuesta: destino.tipoRespuesta } : {}),
+  };
 }
 
 /** Devuelve la cadena de consulta con solo los parámetros permitidos, o null si alguno no lo es. */
 function construirConsulta(
   consulta: URLSearchParams,
-  permitidos: readonly string[],
+  permitidos: Readonly<Record<string, TipoParametro>>,
 ): string | null {
   const salida = new URLSearchParams();
   for (const [clave, valor] of consulta) {
-    if (!permitidos.includes(clave) || !VALOR_ENTERO_POSITIVO.test(valor)) {
+    const tipo = Object.prototype.hasOwnProperty.call(permitidos, clave) ? permitidos[clave] : undefined;
+    if (tipo === undefined || !VALIDADORES[tipo].test(valor)) {
       return null;
     }
     salida.append(clave, valor);

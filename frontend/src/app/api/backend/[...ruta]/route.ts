@@ -63,6 +63,7 @@ async function gestionarPeticion(peticion: Request, contexto: Contexto): Promise
     peticion,
     token,
     cuerpo,
+    tipoEsperado: destino.tipoRespuesta,
   });
 }
 

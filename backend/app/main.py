@@ -18,6 +18,7 @@ from app.db.conexion import conectar
 from app.db.migraciones import aplicar_migraciones
 from app.jobs.router import router as router_trabajos
 from app.jobs.worker import Worker
+from app.modules.analisis.router import router as router_analisis
 from app.modules.projects.router import router as router_proyectos
 from app.modules.sistema.router import router as router_sistema
 from app.modules.videos.router import router as router_videos
@@ -97,6 +98,7 @@ def crear_aplicacion(configuracion: Configuracion | None = None) -> FastAPI:
     app.include_router(router_proyectos, prefix=PREFIJO_API)
     app.include_router(router_videos, prefix=PREFIJO_API)
     app.include_router(router_trabajos, prefix=PREFIJO_API)
+    app.include_router(router_analisis, prefix=PREFIJO_API)
     return app
 
 

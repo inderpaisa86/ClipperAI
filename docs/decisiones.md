@@ -578,7 +578,8 @@ Si el original se mueve o se borra después de importarlo, el video aparece como
 - Si no hay PID registrado, el trabajo se reencola solo cuando su latido supera 60 s.
 - Un trabajo con cancelación pendiente pasa a `cancelado`. Uno que ya se interrumpió 3 veces pasa a `fallido`.
 - Los segmentos en `procesando` vuelven a `pendiente` al reencolar, o pasan a `fallido` si el trabajo termina.
-- Al detener el backend de forma ordenada, el trabajo en curso vuelve a cola. No cuenta como fallo, aunque sí consume un intento.
+- Al detener el backend de forma ordenada, el trabajo en curso vuelve a cola con `intentos` revertido en uno, porque el intento reclamado no llegó a ejecutarse. El `claim_token` se invalida y el segmento en `procesando` vuelve a `pendiente`. La parada no se evalúa contra el límite de intentos.
+- Un fallo de la tarea o un proceso que termina sin confirmar consumen el intento. La recuperación de un proceso muerto también lo conserva.
 
 ---
 
@@ -587,3 +588,55 @@ Si el original se mueve o se borra después de importarlo, el video aparece como
 **Estado:** Aprobada por el usuario. Amplía D-024 en la parte de seguridad del Módulo 1.
 
 **Decisión.** Cada invocación de FFprobe usa `-protocol_whitelist file`. Así un nombre con esquema, como `concat:` o `http:`, no puede leer otra fuente. Las pruebas comprueban que el argumento está antes de `-i` y que la lectura de un archivo local sigue funcionando.
+
+---
+
+## D-044. Persistencia de análisis y confirmación compartida con la cola
+**Fecha:** Módulo 2, Etapa 2
+**Estado:** Aprobada por el usuario al autorizar la Etapa 2.
+
+**Contexto.** D-034 asigna al módulo `analisis` sus tablas, y D-032 exige que las señales, las filas de fotogramas y el estado del segmento se confirmen en una sola transacción. `jobs` es dueño de `segmentos_trabajo`, así que ningún módulo puede escribir en las tablas del otro.
+
+**Decisión.**
+
+- Migración `0004_analisis.sql` con tres tablas:
+  - `analisis`: una fila por video y analizador (`UNIQUE (video_id, analizador)`), con `estado` (`pendiente`, `en_curso`, `completado`, `fallido`), `version_analizador`, `trabajo_id` y `error` (500 caracteres como máximo).
+  - `senales`: `tipo`, `inicio_ms`, `fin_ms`, `valor` y `confianza` (entre 0 y 1). `UNIQUE (analisis_id, tipo, inicio_ms, fin_ms)`, para que reprocesar un segmento inserte con `INSERT OR IGNORE` y no duplique filas.
+  - `fotogramas`: `tiempo_ms` y `ruta_relativa` a `data/`. `UNIQUE (analisis_id, tiempo_ms)`.
+- `analisis.video_id` referencia a `videos` con `ON DELETE CASCADE`. `analisis.trabajo_id` referencia a `trabajos` con `ON DELETE SET NULL`.
+- `jobs.service.confirmar_segmento` acepta un parámetro opcional `persistir`. Se ejecuta dentro de la misma transacción `BEGIN IMMEDIATE` que marca el segmento como `completado`. Si `persistir` falla, se deshacen las dos escrituras. `jobs` no conoce las tablas que escribe `persistir`.
+- Las funciones de `analisis/repository.py` no hacen `commit`. Así no cierran la transacción de quien las llama.
+- Un cambio de versión del analizador borra las señales y los fotogramas del análisis (D-015). Con la misma versión, un análisis fallido vuelve a `pendiente` y conserva sus resultados.
+- Las miniaturas van en `work/<video_id>/fotogramas/<tiempo_ms>.jpg`. Se escriben en un `*.tmp` y se renombran con `os.replace`. Limitan su tamaño a 2 MiB y deben empezar con la cabecera JPEG.
+- El barrido de miniaturas sin fila se hace dentro de una transacción `BEGIN IMMEDIATE`. Así un trabajo nuevo no puede empezar a escribir mientras se compara con la base. Si hay un trabajo ejecutándose, el barrido no corre.
+- No hay endpoint de creación. `preparar_analisis` solo lo llama código del servidor.
+- El vocabulario de tipos de señal se valida por formato (minúsculas, números y guion bajo, hasta 32 caracteres), no por lista cerrada. La lista concreta se fijará al implementar audio y visión. Agregar tipos no exige migración.
+
+**Alternativas descartadas.**
+
+- Que `analisis` escriba en `segmentos_trabajo` o que `jobs` escriba en `senales`. Rompe D-012.
+- Confirmar el segmento primero y escribir las señales después, en otra transacción. Un fallo entre las dos dejaría un segmento completado sin datos.
+
+**Consecuencias.** Un analizador nunca escribe en la base directamente. Devuelve su resultado al proceso del trabajo, y ese proceso lo pasa a `persistir`. Un cambio en `confirmar_segmento` que separe las dos escrituras rompe esta garantía.
+
+---
+
+## D-045. Contrato de analizadores, registro y API de consulta
+**Fecha:** Módulo 2, Etapa 2
+**Estado:** Aprobada por el usuario al autorizar la Etapa 2.
+
+**Decisión.**
+
+- `app/plugins/contrato.py` define `Senal`, `FotogramaProducido`, `SegmentoEntrada` y `ResultadoSegmento`, todos inmutables y validados al crearse. También define los protocolos `AlmacenFotogramas` y `Analizador`. Un analizador tiene `id`, `version` y `analizar_segmento(segmento, almacen)`. No recibe acceso a la base de datos.
+- `app/plugins/registro.py` tiene el registro de analizadores. Valida el identificador, la versión y la duplicidad. Está vacío hasta la Etapa 3. Los módulos `audio` y `vision` no existen todavía, para no crear archivos vacíos (D-016).
+- La API es de solo lectura, bajo `/api/v1/videos/{id}/analisis`:
+  - `GET ""`: lista los análisis del video.
+  - `GET /{analizador}`: devuelve un análisis.
+  - `GET /{analizador}/senales?inicio_ms&fin_ms&limite`: devuelve las señales que se solapan con el intervalo. Límite de 1 a 2000, 500 por defecto.
+  - `GET /{analizador}/fotogramas?limite`: devuelve los tiempos de los fotogramas.
+  - `GET /{analizador}/fotogramas/{tiempo_ms}/miniatura`: devuelve el JPEG con `Cache-Control: no-store`.
+- Las respuestas no incluyen rutas del sistema. La miniatura se sirve leyendo bloques, no cargando el archivo completo.
+- Antes de servir una miniatura se comprueba que la ruta registrada coincide con la del almacén y que el archivo queda dentro de `data/`, aunque haya enlaces o junctions.
+- Proxy (amplía D-036): entradas nuevas para cada endpoint. Los parámetros `inicio_ms` y `fin_ms` aceptan cero. El destino de miniaturas declara `image/jpeg`, y el proxy responde 502 si el backend devuelve otro tipo con éxito. No se agregó el parámetro `tipo` de D-036, porque la API todavía no lo necesita.
+
+**Consecuencias.** Los analizadores de la Etapa 3 se registran en el registro y escriben sus resultados a través de `confirmar_segmento`. Hasta entonces, la API devuelve listas vacías o 404. No hay datos simulados.
