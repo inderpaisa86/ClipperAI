@@ -640,3 +640,252 @@ Si el original se mueve o se borra después de importarlo, el video aparece como
 - Proxy (amplía D-036): entradas nuevas para cada endpoint. Los parámetros `inicio_ms` y `fin_ms` aceptan cero. El destino de miniaturas declara `image/jpeg`, y el proxy responde 502 si el backend devuelve otro tipo con éxito. No se agregó el parámetro `tipo` de D-036, porque la API todavía no lo necesita.
 
 **Consecuencias.** Los analizadores de la Etapa 3 se registran en el registro y escriben sus resultados a través de `confirmar_segmento`. Hasta entonces, la API devuelve listas vacías o 404. No hay datos simulados.
+
+---
+
+## D-046. Eliminación de datos derivados de un video
+**Fecha:** Módulo 2, Etapa 3. Pendiente A de la Etapa 2.
+**Estado:** Aprobada por el usuario al autorizar la Etapa 3.
+
+**Decisión.**
+
+- `videos.service.eliminar` abre una transacción. Dentro, pide a `analisis.service.preparar_eliminacion` que compruebe que ningún análisis del video tiene un trabajo activo y que borre sus análisis. Las señales y los fotogramas se borran en cascada. Después borra la fila del video.
+- Si un análisis del video tiene un trabajo en cola o ejecutándose, la eliminación responde 409 y no borra nada.
+- Después del `COMMIT`, `analisis.service.borrar_archivos_derivados` borra las miniaturas (`.jpg`) y temporales (`.tmp`) de `work/<video_id>/fotogramas`. Luego quita los directorios que quedan vacíos.
+- Un fallo al borrar una miniatura no cambia la respuesta (204). Se registra en el log y el archivo queda huérfano.
+- Al arrancar, `analisis.service.limpiar_derivados_huerfanos` borra las miniaturas de los directorios `work/<número>` cuyo id ya no existe en `videos`. Es la recuperación de huérfanos. Un fallo en esa limpieza se registra y no impide arrancar.
+- Ninguna de estas operaciones sigue enlaces simbólicos ni junctions en la ruta. Tampoco toca archivos fuera de `data/`, ni el original del video.
+- El video no accede a las tablas de análisis: llama a `analisis.service`. `analisis` no accede a la tabla `videos`: usa `videos.service.ids_existentes`.
+- Los ids de `videos` son `AUTOINCREMENT`, así que un id eliminado no se reutiliza y una miniatura huérfana no puede asignarse a un video nuevo.
+
+**Alternativas descartadas.**
+
+- Borrar los archivos antes de la transacción. Un fallo de la base dejaría miniaturas borradas que la base sigue referenciando.
+- Dejar la limpieza sin barrido de arranque. Un fallo de borrado dejaría archivos sin forma de recuperarlos.
+
+**Consecuencias.** Un análisis en curso bloquea la eliminación de su video hasta que termine o se cancele. Un análisis con trabajo ya terminado no bloquea.
+
+---
+
+## D-047. Rutas absolutas fuera de la API de videos
+**Fecha:** Módulo 2, Etapa 3. Pendiente B de la Etapa 2.
+**Estado:** Aprobada por el usuario al autorizar la Etapa 3.
+
+**Decisión.**
+
+- `VideoRespuesta` ya no tiene `ruta`. Tiene `nombre_archivo`, el nombre del archivo original. La reproducción sigue por `GET /videos/{id}/stream`.
+- `POST /videos/seleccion` ya no devuelve la ruta elegida. Devuelve `{seleccion_id, nombre_archivo}`. La ruta queda en `RegistroSelecciones` (`modules/videos/selecciones.py`), en memoria del backend. La selección caduca a los 10 minutos, se usa una sola vez y el registro guarda como máximo 16 entradas.
+- `POST /videos` acepta `ruta` (escrita por el usuario) o `seleccion_id`. Exactamente uno de los dos.
+- Consumidores revisados: `DetalleVideo.tsx` muestra `nombre_archivo`. `ImportarVideo.tsx` envía `seleccion_id` en lugar de la ruta devuelta por el selector. `lib/api/videos.ts` y `lib/api/tipos.ts` se actualizaron. El proxy no necesita cambios porque reenvía el cuerpo JSON sin validar campos.
+- La ruta absoluta solo existe en memoria del backend, en la base de datos (`ruta_original`) y en los procesos internos (`ruta_para_analisis`).
+- Las pruebas `test_videos_privacidad.py` comprueban que ninguna respuesta pública de videos, análisis, proyectos, selección ni errores contiene la ruta del original ni la carpeta de datos.
+
+**Consecuencias.** El campo `nombre` de `VideoRespuesta` se conserva, porque la interfaz ya lo usa como título. Hoy su valor coincide con `nombre_archivo`. Un cambio futuro que los separe debe documentarse aquí.
+
+---
+
+## D-048. Analizador de audio y vocabulario de señales v1.0.0
+**Fecha:** Módulo 2, Etapa 3. Pendiente C y D de la Etapa 2.
+**Estado:** Implementada. Parcialmente reemplazada por D-051 (umbral y duración mínima) y D-052 (vocabulario cerrado, que cierra la propuesta de esta decisión).
+
+**Vocabulario (identificadores estables).**
+
+- `energia_audio`: nivel medio de cada ventana de 200 ms. Valor normalizado de 0 a 1, donde 0 equivale a -90 dBFS o menos y 1 a 0 dBFS. Confianza 1.
+- `silencio`: intervalo continuo de al menos 400 ms con nivel bajo el umbral adaptativo del video. Valor = (umbral - nivel medio en dB) / 20, acotado entre 0 y 1. Confianza 1.
+- `cambio_intensidad`: par de ventanas consecutivas cuyo nivel cambia al menos 12 dB. El intervalo abarca las dos ventanas (400 ms). Valor = |cambio en dB| / 24, acotado entre 0 y 1. Confianza 1.
+
+Todos los tiempos son enteros en milisegundos.
+
+**Procesamiento.**
+
+- FFmpeg entrega PCM s16le, mono, 16 kHz, por una tubería (D-030). Python lee ventana a ventana. No se escribe WAV.
+- Un trabajo `analisis_audio` tiene segmentos `energia` de 60 s y un segmento final `consolidacion`. Cada segmento de energía se confirma con `jobs.service.confirmar_segmento`, en la misma transacción que sus señales.
+- El segmento `consolidacion` calcula silencios y cambios sobre la serie completa. Escribe sus señales y marca el análisis como `completado` en la misma transacción.
+- Si el trabajo falla, se cancela o pierde su reclamo, el análisis pasa a `fallido` con un mensaje corto. La cancelación se revisa entre ventanas.
+- Si un trabajo cancelado en cola o terminado sin completar deja el análisis en `en_curso`, la API muestra `fallido`. La base se corrige al iniciar un análisis nuevo.
+
+**Propuesta de umbral adaptativo (requiere confirmación).** No encontré en `docs/` ninguna regla de umbral aprobada. Usé esta regla: percentil 10 de los niveles del video, más 10 dB, acotado entre -55 y -35 dB. Si el usuario tiene la regla aprobada, se reemplaza en `senales.umbral_adaptativo`. No afecta al resto del código.
+
+**Propuesta de contrato común (requiere aprobación antes de implementarse).** Hoy `Senal.tipo` se valida por formato (D-044). Para aplicar una lista cerrada harían falta tres cambios:
+
+1. Una lista cerrada en `app/plugins/contrato.py`, que sea la fuente de verdad para `Senal`.
+2. Un parámetro `tipo` en `lib/proxy/destinos.ts` con esa misma lista. Hoy existe el mismo acuerdo en D-036 pero no está implementado. Mantener dos listas (Python y TypeScript) exige una prueba de paridad.
+3. Un filtro `tipo` en `GET /videos/{id}/analisis/{analizador}/senales`.
+
+Mientras no se apruebe, el vocabulario de audio queda documentado aquí y en `senales.py`, y la API no filtra por tipo.
+
+**Consecuencias.** Un analizador nuevo debe declarar sus tipos con la misma regla de formato. Un cambio de definición de un tipo existente exige una versión nueva del analizador, para que sus resultados previos se invaliden (D-015).
+
+---
+
+## D-049. Composición de analizadores y tipos de trabajo
+**Fecha:** Módulo 2, Etapa 3.
+**Estado:** Aprobada por el usuario al autorizar la Etapa 3.
+
+**Decisión.**
+
+- `app/composicion.py` es el único lugar donde se registran los analizadores (`REGISTRO`) y los tipos de trabajo que necesitan módulos de análisis (`jobs.tareas.registrar`).
+- Lo llaman `crear_aplicacion` y el proceso hijo de cada trabajo (`app.jobs.ejecutar`). Ambos necesitan el mismo registro.
+- `jobs` no importa módulos de análisis. Así no hay importaciones circulares.
+- `jobs.service.crear` acepta `al_insertar`. Ese callback se ejecuta dentro de la misma transacción que crea el trabajo. `audio` lo usa para dejar el análisis en curso sin que quede un trabajo sin reservar, o un análisis reservado sin trabajo.
+
+**Consecuencias.** Un módulo nuevo de análisis se registra en `composicion.registrar`, no en `jobs`.
+
+---
+
+## D-050. Prueba intermitente `test_cancelacion_mata_al_proceso_nieto`
+**Fecha:** Módulo 2, Etapa 3. Pendiente E de la Etapa 2.
+**Estado:** Aprobada por el usuario al autorizar la Etapa 3.
+
+**Hallazgo.** No reproduje el fallo. Ejecuté la prueba 25 veces en serie, 20 veces con ocho procesos de carga de CPU, 24 veces en cuatro ejecuciones paralelas, y la carpeta de pruebas de trabajos seis veces seguidas. Todas pasaron.
+
+**Causa probable.** El protocolo de publicación del PID del nieto no era atómico. El nieto creaba `nieto.pid` con `write_text` directo, así que el lector podía encontrar el archivo ya creado y todavía sin contenido. La prueba reintentaba solo mientras el contenido no fuera numérico, y no distinguía ese estado de un error de lectura. Un `PermissionError` transitorio (por ejemplo, un antivirus que bloquea el archivo recién creado) fallaba la prueba sin explicación.
+
+**Corrección.**
+
+- El nieto escribe `nieto.pid.tmp` y luego hace `os.replace` a `nieto.pid` (`jobs/tareas.py`). El lector ve el archivo final completo o no lo ve.
+- La prueba espera el valor con `_esperar_valor`, que solo espera a que el archivo final exista y tenga un PID válido. Un `PermissionError` se propaga como fallo. No se reintenta.
+- No se añadieron reintentos ni se subió el tiempo de espera.
+
+**Limitación.** Si el fallo original fue otra causa, esta corrección no la elimina. Sin reproducción no hay confirmación. Si vuelve a aparecer, el mensaje de error de `_esperar_valor` y el log del worker indicarán en qué paso se detuvo.
+
+**Consecuencias.** Cualquier proceso que publique un archivo que otro proceso lee debe escribir a un temporal y renombrar.
+
+---
+
+## D-051. Umbral adaptativo y duración mínima de silencio
+**Fecha:** Módulo 2, Etapa 3. Revisión de la Etapa 3.
+**Estado:** Aprobada por el usuario. Reemplaza los valores de D-048.
+
+**Decisión.**
+
+- Umbral del video: percentil 10 de los niveles de ventana, más 12 dB, acotado entre -55 y -35 dBFS. (D-048 usaba 10 dB.)
+- Duración mínima de un silencio: 500 ms. (D-048 usaba 400 ms.) Con ventanas de 200 ms, el silencio más corto que se reporta ocupa tres ventanas.
+- El resto de reglas de D-048 se mantiene: la consolidación usa la serie completa del video, y los tramos de silencio y de cambio nunca se unen a través de un hueco de tiempo.
+
+**Consecuencias.** Un silencio de 400 ms deja de reportarse. Los resultados ya guardados con la versión 1.0.0 del analizador no cambian sin reanalizar. Un cambio de estos valores exige subir la versión del analizador para que los resultados previos se invaliden (D-015).
+
+---
+
+## D-052. Vocabulario cerrado de tipos de señal
+**Fecha:** Módulo 2, Etapa 3. Revisión de la Etapa 3.
+**Estado:** Aprobada por el usuario. Cierra la propuesta de contrato común de D-048. Reemplaza la validación de formato de D-044 para el campo `tipo`.
+
+**Decisión.**
+
+1. `app/plugins/contrato.py` define `TIPOS_SENAL_PERMITIDOS`. Es la única fuente de verdad. Hoy contiene `energia_audio`, `silencio` y `cambio_intensidad`. `Senal` rechaza cualquier otro tipo, además de la validación de formato.
+2. `frontend/src/lib/proxy/destinos.ts` exporta `TIPOS_SENAL_PERMITIDOS` con la misma lista. El parámetro `tipo` de `GET /videos/{id}/analisis/{analizador}/senales` usa el validador `tipo_senal`. Un valor fuera de la lista responde 400 en el proxy.
+3. `GET .../senales?tipo=` filtra por tipo. Un valor fuera de la lista responde 422 en el backend. El filtro es mayúsculas y minúsculas exactas.
+4. La paridad se verifica con dos pruebas. La primera compara las dos listas por texto. La segunda ejecuta el validador real de `destinos.ts` con Node, si está instalado, y comprueba casos válidos e inválidos.
+5. Los tipos visuales se agregarán cuando se implemente el módulo de visión. Agregar un tipo exige cambiar ambas listas, actualizar esta decisión y pasar la prueba de paridad.
+
+**Consecuencias.** Las pruebas de persistencia usan solo tipos del vocabulario. Las filas que ya existen en la base no se validan de nuevo, porque la base conserva la regla de formato. Un tipo antiguo fuera de la lista sigue siendo legible, pero `Senal` no lo puede crear.
+
+---
+
+## D-053. Inicio de análisis por API
+**Fecha:** Módulo 2, Etapa 3. Revisión de la Etapa 3.
+**Estado:** Aprobada por el usuario.
+
+**Decisión.** `POST /api/v1/videos/{id}/analisis` inicia los analizadores registrados que tengan lanzador. Responde 202 con una lista de `{analizador, accion, trabajo_id, estado, detalle}`. Las acciones son:
+
+- `iniciado`: se creó un trabajo nuevo en cola. Devuelve su id.
+- `en_curso`: ya hay un trabajo activo para ese analizador. Devuelve ese trabajo, sin crear otro.
+- `sin_cambios`: el análisis está completo con la versión vigente. No se repite.
+- `rechazado`: el video no admite el analizador, por ejemplo por no tener audio. Devuelve el motivo.
+
+Reglas:
+
+- Un análisis fallido o cancelado se reintenta con un trabajo nuevo.
+- Video inexistente: 404. Archivo original no disponible: 409. No se crea nada en ninguno de los dos casos.
+- La creación del trabajo y el estado `en_curso` del análisis ocurren en una sola transacción (`al_insertar` de D-049). Si otra petición gana la carrera, el `Conflicto` se convierte en `en_curso` con el trabajo de la otra.
+- El límite de un trabajo pesado a la vez lo aplica el worker. Los trabajos nuevos quedan en cola en orden de llegada.
+- El analizador de audio se entrega desde `composicion.lanzadores()` y `app.state.lanzadores`. El router no importa módulos concretos de análisis.
+- El proxy permite `POST` solo en `videos/{id}/analisis`. Otros métodos responden 405.
+
+**Consecuencias.** La API no tiene interfaz. El endpoint solo inicia análisis: no los detiene ni los borra.
+
+---
+
+## D-054. Cancelación de un análisis en cola
+**Fecha:** Módulo 2, Etapa 3. Revisión de la Etapa 3.
+**Estado:** Aprobada. El estado `cancelado` se implementó en D-055. Se mantiene la descripción de la propuesta como referencia histórica.
+
+**Corrección implementada.**
+
+- Cada tipo de trabajo puede registrar un gancho de cancelación en cola (`tareas.registrar(..., al_cancelar_en_cola=...)`). `jobs.service.cancelar` lo ejecuta dentro de la misma transacción que la cancelación.
+- El gancho de audio llama a `analisis.service.cerrar_por_cancelacion`. Pasa el análisis en curso de ese trabajo a `fallido`, con el error `Análisis cancelado antes de ejecutarse.`. El cambio queda persistido en la base.
+- Si un trabajo se cancela mientras ejecuta, la tarea marca el análisis como fallido con `Análisis cancelado.`.
+- La lectura del análisis sigue corrigiendo los casos que el gancho no alcanza, por ejemplo un trabajo eliminado por el worker tras la gracia de cancelación. La respuesta muestra `fallido` mientras el trabajo no esté activo.
+
+**Propuesta de estado `cancelado` (no implementada).**
+
+- Impacto: la tabla `analisis` tiene `CHECK (estado IN ('pendiente', 'en_curso', 'completado', 'fallido'))`. SQLite no permite cambiar un `CHECK` con `ALTER TABLE`. Hay que reconstruir la tabla: crear `analisis_nueva`, copiar las filas, borrar `analisis` y renombrar. Como `senales` y `fotogramas` referencian `analisis` con `ON DELETE CASCADE`, borrar la tabla vieja con las claves externas activas borraría sus señales. La migración debe ejecutarse con `PRAGMA foreign_keys = OFF`, fuera de la transacción de migración, y verificar `PRAGMA foreign_key_check` antes de confirmar.
+- Riesgo: si la migración falla a medio camino, los datos de análisis se pierden. Antes de aplicarla se haría una copia verificable, como en las etapas anteriores.
+- Alternativa sin migración: guardar `fallido` con un código de motivo en una columna nueva, `ADD COLUMN motivo TEXT`. No requiere reconstruir la tabla, pero deja el estado y el motivo separados.
+- Recomendación: la reconstrucción con `cancelado` como estado propio, porque la API y el proxy podrían distinguirlo sin leer el texto del error.
+
+**Consecuencias.** Hasta que se decida, un análisis cancelado aparece como `fallido`, con el error que indica la cancelación.
+
+---
+
+## D-055. Estado `cancelado` y migración 0005
+**Fecha:** Módulo 2, Etapa 3. Cierre de la Etapa 3.
+**Estado:** Aprobada por el usuario. Implementada.
+
+**Decisión.**
+
+- `analisis.estado` admite `cancelado`. La migración `0005_analisis_cancelado.sql` reconstruye la tabla con el nuevo `CHECK`. No se añadió una columna `motivo`.
+- La reconstrucción sigue el procedimiento de 12 pasos de SQLite. Conserva las columnas, la restricción `UNIQUE (video_id, analizador)`, `ON DELETE CASCADE` hacia `videos`, `ON DELETE SET NULL` hacia `trabajos`, y el contador `AUTOINCREMENT`. `senales` y `fotogramas` siguen referenciando `analisis` con `ON DELETE CASCADE`.
+- Las claves externas se desactivan antes de abrir la transacción. El runner de migraciones (`app/db/migraciones.py`) reconoce una migración que las necesita por su primera línea (`-- requiere: claves_externas_desactivadas`). Antes de confirmar ejecuta `PRAGMA foreign_key_check` y `PRAGMA integrity_check`. Si alguno falla, hace `ROLLBACK`. Al terminar, restaura el valor previo de `foreign_keys`, haya éxito o fallo.
+- Las migraciones sin esa marca siguen usando el camino anterior, sin cambios.
+
+**Estrategia de recuperación.** Antes de aplicar la migración en una base real se genera una copia con la API de backup de SQLite. Se verifica con `integrity_check`, con los conteos de cada tabla y con el SHA-256 del archivo. Si la migración falla, la transacción se deshace y la base queda en la versión 4. Un fallo a medio camino no deja la base parcialmente migrada.
+
+**Estados y transiciones.**
+
+| Desde | Evento | Hasta |
+|---|---|---|
+| (nuevo) | Inicio (`iniciar`, API o servidor) | `en_curso` |
+| `en_curso` | Consolidación confirmada | `completado` |
+| `en_curso` | Error de la tarea o del proceso | `fallido` (conserva resultados, D-044) |
+| `en_curso` | Cancelación en cola, cancelación en ejecución o terminación forzada | `cancelado` (sin resultados, D-057) |
+| `cancelado` o `fallido` | Inicio nuevo | `en_curso` |
+| `completado` con versión vigente | Inicio nuevo | Sin cambios (`sin_cambios`) |
+
+**Consecuencias.** La API y el proxy transportan el estado como texto. El proxy no valida estados, así que no requirió cambios. El frontend no muestra estados de análisis.
+
+---
+
+## D-056. Cierre de trabajos y gancho de terminación
+**Fecha:** Módulo 2, Etapa 3. Cierre de la Etapa 3.
+**Estado:** Aprobada por el usuario. Implementada.
+
+**Decisión.**
+
+- Todo cierre de un trabajo sin éxito llama al gancho de su tipo (`tareas.registrar(..., al_terminar=...)`), dentro de la misma transacción. El gancho recibe `(conexión, trabajo_id, estado, error)`, donde `estado` es `cancelado` o `fallido`.
+- Los cierres cubiertos son: cancelación en cola, cancelación pedida al proceso, cierre tras la salida del proceso, reencolado sin intentos restantes, y fallo registrado por el proceso del trabajo.
+- Así el análisis se cierra aunque lo cierre el supervisor. No depende del proceso hijo.
+- El supervisor clasifica la terminación con un motivo explícito (`salida`, `parada` o `cancelacion_forzada`). Solo estos motivos pueden producir `cancelado`:
+  - `cancelacion_forzada`: el supervisor terminó el proceso tras la gracia de cancelación. Es cancelación si hay cancelación pedida.
+  - `parada`: parada ordenada del worker. Es cancelación si hay cancelación pedida. Si no la hay, reencola sin contar como fallo.
+  - `salida`: el proceso terminó solo. Sin resultado confirmado es `fallido`, aunque hubiera cancelación pedida. Un error real nunca se registra como cancelación.
+- Un motivo desconocido lanza `ValueError`.
+
+**Consecuencias.** Un tipo nuevo de trabajo que deba cerrar un resultado propio registra su gancho. `jobs` no importa a los módulos de análisis.
+
+---
+
+## D-057. Política de señales en cancelaciones y fallos
+**Fecha:** Módulo 2, Etapa 3. Cierre de la Etapa 3.
+**Estado:** Aprobada por el usuario. Implementada.
+
+**Decisión.**
+
+1. **Cancelado: no se conservan señales.** Al pasar a `cancelado`, se borran en la misma transacción las señales y los fotogramas del análisis (`borrar_resultados`). Un reintento recalcula los segmentos desde cero. Así no queda ninguna señal parcial que la API pueda presentar como resultado.
+2. **Fallido: se conservan los segmentos confirmados** (D-044). Son válidos para la misma versión del analizador, porque cada segmento es determinista. El reintento reutiliza esas filas por `INSERT OR IGNORE`. Un fallo no implica que las señales sean inválidas.
+3. **Miniaturas.** Para análisis con fotogramas, al cancelar se borran sus filas. Los archivos `.jpg` quedan en disco hasta el siguiente barrido de huérfanos (D-032). El análisis de audio no genera miniaturas.
+4. **Registros huérfanos.** Las señales siempre referencian un análisis existente (`ON DELETE CASCADE`), y `foreign_key_check` lo comprueba. La prueba con worker real verifica que no quedan señales sin análisis ni referencias rotas.
+5. **Consolidación.** Los silencios y cambios se escriben junto con el estado `completado`, en la misma transacción. Un análisis cancelado antes de la consolidación no tiene silencios parciales.
+
+**Consecuencias.** Cancelar un análisis largo y reintentarlo repite el cálculo de los segmentos ya confirmados. Es el costo de no conservar resultados parciales. Si ese costo resulta alto, se puede cambiar a conservación con reemplazo seguro en una decisión posterior.

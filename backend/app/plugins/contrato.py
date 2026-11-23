@@ -14,6 +14,12 @@ from typing import Protocol, runtime_checkable
 PATRON_IDENTIFICADOR = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 LONGITUD_VERSION_MAXIMA = 32
 
+# Vocabulario cerrado de tipos de señal. Es la única fuente de verdad: el proxy (lib/proxy/destinos.ts)
+# debe tener la misma lista y una prueba lo verifica. Agregar un tipo exige una decisión registrada.
+TIPOS_SENAL_PERMITIDOS: frozenset[str] = frozenset(
+    {"energia_audio", "silencio", "cambio_intensidad"}
+)
+
 
 class ContratoInvalido(ValueError):
     """Un dato o un objeto no cumple el contrato de analizadores."""
@@ -51,6 +57,8 @@ class Senal:
     def __post_init__(self) -> None:
         if not isinstance(self.tipo, str) or not PATRON_IDENTIFICADOR.fullmatch(self.tipo):
             raise ContratoInvalido("El tipo de señal solo admite minúsculas, números y guion bajo.")
+        if self.tipo not in TIPOS_SENAL_PERMITIDOS:
+            raise ContratoInvalido("El tipo de señal no está en el vocabulario permitido.")
         inicio = _entero_en_milisegundos(self.inicio_ms, "inicio_ms")
         fin = _entero_en_milisegundos(self.fin_ms, "fin_ms")
         if fin < inicio:

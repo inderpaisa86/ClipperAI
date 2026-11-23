@@ -1,8 +1,12 @@
 import sqlite3
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.errores import Conflicto, NoEncontrado, SolicitudInvalida
+from app.core.rutas import RaizDatos
+from app.db.conexion import transaccion_inmediata
+from app.modules.analisis import service as analisis
 from app.modules.projects import service as proyectos
 from app.modules.videos import repository
 from app.modules.videos.ffprobe import leer_metadatos
@@ -19,6 +23,14 @@ EXTENSIONES_ADMITIDAS: dict[str, str] = {
     ".webm": "video/webm",
     ".avi": "video/x-msvideo",
 }
+
+
+@dataclass(frozen=True)
+class DatosAnalisis:
+    """Lo que un analizador necesita del video, sin ruta. `duracion_ms` es None si FFprobe no la dio."""
+
+    duracion_ms: int | None
+    tiene_audio: bool
 
 
 def _es_enlace(ruta: Path) -> bool:
@@ -60,26 +72,22 @@ def validar_ruta_entrada(texto: str) -> Path:
         raise SolicitudInvalida("La ruta es demasiado larga.")
     if "\x00" in limpia:
         raise SolicitudInvalida("La ruta contiene caracteres no válidos.")
-
     ruta = Path(limpia)
     if not ruta.is_absolute():
         raise SolicitudInvalida("La ruta debe ser absoluta.")
     if ".." in ruta.parts:
         # Con '..' después de un enlace, el sistema resuelve una ruta distinta de la que se ve.
         raise SolicitudInvalida("La ruta no puede contener '..'.")
-
     extension = ruta.suffix.lower()
     if extension not in EXTENSIONES_ADMITIDAS:
         admitidas = ", ".join(sorted(EXTENSIONES_ADMITIDAS))
         raise SolicitudInvalida(f"Formato no compatible. Formatos admitidos: {admitidas}.")
-
     try:
         estado = ruta.lstat()
     except FileNotFoundError as error:
         raise SolicitudInvalida("El archivo no existe.") from error
     except OSError as error:
         raise SolicitudInvalida("No se puede acceder al archivo.") from error
-
     if _contiene_enlaces(ruta):
         raise SolicitudInvalida(
             "No se admiten enlaces simbólicos ni accesos directos en la ruta. "
@@ -89,13 +97,11 @@ def validar_ruta_entrada(texto: str) -> Path:
         raise SolicitudInvalida("La ruta no corresponde a un archivo.")
     if estado.st_size == 0:
         raise SolicitudInvalida("El archivo está vacío.")
-
     try:
         with open(ruta, "rb"):
             pass
     except OSError as error:
         raise SolicitudInvalida("No hay permiso para leer el archivo.") from error
-
     return ruta
 
 
@@ -104,7 +110,7 @@ def _a_respuesta(fila: sqlite3.Row) -> VideoRespuesta:
         id=fila["id"],
         proyecto_id=fila["proyecto_id"],
         nombre=fila["nombre"],
-        ruta=fila["ruta_original"],
+        nombre_archivo=Path(fila["ruta_original"]).name,
         tamano_bytes=fila["tamano_bytes"],
         duracion_segundos=fila["duracion_segundos"],
         ancho=fila["ancho"],
@@ -120,22 +126,21 @@ def _a_respuesta(fila: sqlite3.Row) -> VideoRespuesta:
 
 def importar(
     conexion: sqlite3.Connection,
-    datos: VideoCrear,
+    proyecto_id: int,
+    texto_ruta: str,
     ruta_configurada_ffprobe: Path | None,
     sistema: str,
 ) -> VideoRespuesta:
     # Se valida el proyecto a través de su servicio, sin leer la tabla proyectos.
-    proyectos.obtener(conexion, datos.proyecto_id)
-
-    ruta = validar_ruta_entrada(datos.ruta)
+    proyectos.obtener(conexion, proyecto_id)
+    ruta = validar_ruta_entrada(texto_ruta)
     tamano = ruta.stat().st_size
     metadatos = leer_metadatos(ruta, ruta_configurada_ffprobe, sistema, tamano)
-
     try:
         video_id = repository.insertar(
             conexion,
             {
-                "proyecto_id": datos.proyecto_id,
+                "proyecto_id": proyecto_id,
                 "nombre": ruta.name,
                 "ruta_original": str(ruta),
                 "tamano_bytes": tamano,
@@ -150,7 +155,6 @@ def importar(
         )
     except sqlite3.IntegrityError as error:
         raise Conflicto("Este video ya está registrado en el proyecto.") from error
-
     return obtener(conexion, video_id)
 
 
@@ -184,21 +188,52 @@ def existe(conexion: sqlite3.Connection, video_id: int) -> bool:
     return repository.obtener(conexion, video_id) is not None
 
 
-def eliminar(conexion: sqlite3.Connection, video_id: int) -> None:
-    if not repository.eliminar(conexion, video_id):
-        raise NoEncontrado("El video no existe.")
+def ids_existentes(conexion: sqlite3.Connection) -> set[int]:
+    """Servicio público para otros módulos. Identificadores de todos los videos registrados."""
+    return repository.ids(conexion)
+
+
+def eliminar(conexion: sqlite3.Connection, raiz: RaizDatos, video_id: int) -> None:
+    """Elimina el registro del video y sus datos derivados. El archivo original nunca se toca.
+
+    La base de datos cambia en una sola transacción: se borran los análisis del video a través del
+    servicio de análisis, y después el registro del video. Los archivos de miniaturas se borran
+    cuando la transacción ya está confirmada. Si alguno falla, queda huérfano y la limpieza de
+    arranque lo retira. Nunca queda una fila que apunte a un archivo ya borrado.
+    """
+    with transaccion_inmediata(conexion):
+        if repository.obtener(conexion, video_id) is None:
+            raise NoEncontrado("El video no existe.")
+        analisis.preparar_eliminacion(conexion, video_id)
+        repository.eliminar(conexion, video_id)
+    analisis.borrar_archivos_derivados(raiz, video_id)
 
 
 def ruta_para_transmision(conexion: sqlite3.Connection, video_id: int) -> tuple[Path, str]:
     """Devuelve la ruta del original y su tipo MIME. Verifica que el archivo siga existiendo."""
-    fila = repository.obtener(conexion, video_id)
-    if fila is None:
-        raise NoEncontrado("El video no existe.")
-
-    ruta = Path(fila["ruta_original"])
-    if not _archivo_accesible(ruta):
-        raise NoEncontrado("El archivo original ya no está disponible.")
-
+    ruta = ruta_para_analisis(conexion, video_id)
     tipo = EXTENSIONES_ADMITIDAS.get(ruta.suffix.lower(), "application/octet-stream")
     return ruta, tipo
 
+
+def ruta_para_analisis(conexion: sqlite3.Connection, video_id: int) -> Path:
+    """Ruta del original para procesos internos del backend. Nunca se devuelve por la API."""
+    fila = repository.obtener(conexion, video_id)
+    if fila is None:
+        raise NoEncontrado("El video no existe.")
+    ruta = Path(fila["ruta_original"])
+    if not _archivo_accesible(ruta):
+        raise NoEncontrado("El archivo original ya no está disponible.")
+    return ruta
+
+
+def datos_para_analisis(conexion: sqlite3.Connection, video_id: int) -> DatosAnalisis:
+    """Servicio público para analizadores. Duración en milisegundos enteros y si hay pista de audio."""
+    fila = repository.obtener(conexion, video_id)
+    if fila is None:
+        raise NoEncontrado("El video no existe.")
+    duracion = fila["duracion_segundos"]
+    return DatosAnalisis(
+        duracion_ms=None if duracion is None else round(float(duracion) * 1000),
+        tiene_audio=fila["codec_audio"] is not None,
+    )

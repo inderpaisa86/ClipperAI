@@ -134,7 +134,7 @@ class Worker:
             return
 
         try:
-            codigo, deteniendo = self._supervisar(conexion, trabajo_id, token, proceso, grupo)
+            codigo, motivo = self._supervisar(conexion, trabajo_id, token, proceso, grupo)
         finally:
             grupo.terminar()
             try:
@@ -143,9 +143,7 @@ class Worker:
                 log.error("El proceso del trabajo %s no terminó tras la orden de cierre.", trabajo_id)
             grupo.cerrar()
 
-        resultado = service.cerrar_tras_proceso(
-            conexion, trabajo_id, token, codigo, deteniendo
-        )
+        resultado = service.cerrar_tras_proceso(conexion, trabajo_id, token, codigo, motivo)
         log.info("Trabajo %s: %s.", trabajo_id, resultado)
 
     def _supervisar(
@@ -155,19 +153,22 @@ class Worker:
         token: str,
         proceso: subprocess.Popen,
         grupo: plataforma.GrupoProcesos,
-    ) -> tuple[int | None, bool]:
-        """Espera al proceso y aplica cancelación y parada. Devuelve (código, si se detuvo por parada)."""
+    ) -> tuple[int | None, str]:
+        """Espera al proceso y aplica cancelación y parada. Devuelve (código, motivo de terminación).
+
+        El motivo es `parada` si el worker se detuvo, `cancelacion_forzada` si el supervisor terminó el proceso
+        tras la gracia de cancelación, y `salida` si el proceso terminó por sí solo.
+        """
         inicio_cancelacion: float | None = None
         inicio_sin_reclamo: float | None = None
-        deteniendo = False
+        motivo = "salida"
         while True:
             codigo = proceso.poll()
             if codigo is not None:
-                return codigo, deteniendo
-            if self._parar.is_set() and not deteniendo:
-                deteniendo = True
+                return codigo, motivo
+            if self._parar.is_set() and motivo != "parada":
+                motivo = "parada"
                 grupo.terminar()
-
             control = service.leer_control(conexion, trabajo_id, token)
             ahora = time.monotonic()
             if control is None:
@@ -178,9 +179,10 @@ class Worker:
             elif control["cancelacion_solicitada"]:
                 inicio_cancelacion = inicio_cancelacion or ahora
                 if ahora - inicio_cancelacion >= self._gracia_cancelacion:
+                    if motivo == "salida":
+                        motivo = "cancelacion_forzada"
                     grupo.terminar()
             self._parar.wait(self._intervalo_sondeo)
-
     # -- Recuperación de trabajos interrumpidos --------------------------------
 
     def _recuperar(self, conexion: Any) -> None:

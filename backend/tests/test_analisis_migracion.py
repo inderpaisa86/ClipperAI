@@ -45,7 +45,7 @@ def test_migracion_0004_crea_tablas_y_registra_version_4(tmp_path):
     try:
         tablas = {fila["name"] for fila in conexion.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"analisis", "senales", "fotogramas"} <= tablas
-        assert conexion.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conexion.execute("PRAGMA user_version").fetchone()[0] == 5
     finally:
         conexion.close()
 
@@ -60,7 +60,7 @@ def test_migracion_0004_conserva_datos_de_una_base_en_version_3(tmp_path):
         conexion.execute("PRAGMA user_version = 3")
         conexion.execute("INSERT INTO proyectos (nombre) VALUES ('existente')")
         conexion.commit()
-        assert aplicar_migraciones(conexion) == 4
+        assert aplicar_migraciones(conexion) == 5
         nombres = [fila["nombre"] for fila in conexion.execute("SELECT nombre FROM proyectos")]
         assert nombres == ["existente"]
         assert conexion.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -73,7 +73,7 @@ def test_migracion_es_idempotente_y_conserva_analisis(tmp_path):
     try:
         _analisis(conexion, _video(conexion))
         conexion.commit()
-        assert aplicar_migraciones(conexion) == 4
+        assert aplicar_migraciones(conexion) == 5
         assert conexion.execute("SELECT COUNT(*) FROM analisis").fetchone()[0] == 1
     finally:
         conexion.close()

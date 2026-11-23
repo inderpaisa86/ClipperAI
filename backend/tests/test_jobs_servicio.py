@@ -177,7 +177,7 @@ def test_cerrar_tras_proceso_sin_confirmacion_falla(conexion):
     trabajo_id = service.crear(conexion, "diagnostico_espera", {})
     token = "f" * 32
     service.reclamar_siguiente(conexion, token)
-    resultado = service.cerrar_tras_proceso(conexion, trabajo_id, token, 0, False)
+    resultado = service.cerrar_tras_proceso(conexion, trabajo_id, token, 0, "salida")
     assert resultado == "fallido"
     assert "sin confirmar el resultado" in service.consultar(conexion, trabajo_id)["error"]
 

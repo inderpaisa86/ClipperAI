@@ -1,14 +1,14 @@
 import { solicitarApi } from "./cliente";
-import type { SeleccionArchivo, Video } from "./tipos";
+import type { OrigenVideo, SeleccionArchivo, Video } from "./tipos";
 
 export function listarVideos(proyectoId: number): Promise<Video[]> {
   return solicitarApi<Video[]>(`videos?proyecto_id=${proyectoId}`);
 }
 
-export function importarVideo(proyectoId: number, ruta: string): Promise<Video> {
+export function importarVideo(proyectoId: number, origen: OrigenVideo): Promise<Video> {
   return solicitarApi<Video>("videos", {
     metodo: "POST",
-    cuerpo: { proyecto_id: proyectoId, ruta },
+    cuerpo: { proyecto_id: proyectoId, ...origen },
   });
 }
 

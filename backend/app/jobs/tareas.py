@@ -16,9 +16,13 @@ if TYPE_CHECKING:
 Tarea = Callable[[dict[str, Any], "ContextoTrabajo"], None]
 
 SEGUNDOS_MAXIMOS = 60.0
+# El PID se publica con un temporal y os.replace. Quien lo lee ve el archivo completo o no lo ve.
 CODIGO_NIETO = (
     "import os, pathlib, sys, time\n"
-    "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='ascii')\n"
+    "destino = pathlib.Path(sys.argv[1])\n"
+    "temporal = destino.with_name(destino.name + '.tmp')\n"
+    "temporal.write_text(str(os.getpid()), encoding='ascii')\n"
+    "os.replace(temporal, destino)\n"
     "time.sleep(600)\n"
 )
 
@@ -68,6 +72,28 @@ REGISTRO: dict[str, Tarea] = {
     "diagnostico_fallo": _fallo,
     "diagnostico_proceso_nieto": _proceso_nieto,
 }
+
+
+# Gancho de cierre sin éxito: (conexión, trabajo_id, estado, error). Estado es `cancelado` o `fallido`.
+GanchoTerminar = Callable[[Any, int, str, str | None], None]
+GANCHOS_TERMINAR: dict[str, GanchoTerminar] = {}
+
+
+def registrar(tipo: str, tarea: Tarea, al_terminar: GanchoTerminar | None = None) -> None:
+    """Registra un tipo de trabajo. Lo llama el arranque de la aplicación, no los módulos.
+
+    `al_terminar` recibe (conexión, trabajo_id, estado, error). `jobs` lo llama dentro de la misma transacción
+    que deja el trabajo en `cancelado` o `fallido`, sea cual sea el proceso que cierra el trabajo: quien pide
+    la cancelación, el proceso del trabajo, el supervisor o la recuperación. Así el módulo dueño de un resultado
+    lo cierra sin depender del proceso hijo. `jobs` no importa a los módulos de análisis.
+    """
+    REGISTRO[tipo] = tarea
+    if al_terminar is not None:
+        GANCHOS_TERMINAR[tipo] = al_terminar
+
+
+def gancho_terminar(tipo: str) -> GanchoTerminar | None:
+    return GANCHOS_TERMINAR.get(tipo)
 
 
 def existe(tipo: str) -> bool:

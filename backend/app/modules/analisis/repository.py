@@ -26,7 +26,7 @@ def obtener_analisis(
 
 def listar_analisis_de_video(conexion: sqlite3.Connection, video_id: int) -> list[sqlite3.Row]:
     return conexion.execute(
-        f"SELECT {COLUMNAS_ANALISIS} FROM analisis WHERE video_id = ? ORDER BY analizador",
+        f"SELECT {COLUMNAS_ANALISIS}, trabajo_id FROM analisis WHERE video_id = ? ORDER BY analizador",
         (video_id,),
     ).fetchall()
 
@@ -101,15 +101,17 @@ def listar_senales(
     inicio_ms: int | None,
     fin_ms: int | None,
     limite: int,
+    tipo: str | None = None,
 ) -> list[sqlite3.Row]:
-    """Señales que se solapan con [inicio_ms, fin_ms]. Sin límites, devuelve todas hasta el límite."""
+    """Señales que se solapan con [inicio_ms, fin_ms], de un tipo si se indica."""
     return conexion.execute(
         "SELECT tipo, inicio_ms, fin_ms, valor, confianza FROM senales "
         "WHERE analisis_id = ? "
         "AND (? IS NULL OR fin_ms >= ?) "
         "AND (? IS NULL OR inicio_ms <= ?) "
+        "AND (? IS NULL OR tipo = ?) "
         "ORDER BY inicio_ms, fin_ms, tipo LIMIT ?",
-        (analisis_id, inicio_ms, inicio_ms, fin_ms, fin_ms, limite),
+        (analisis_id, inicio_ms, inicio_ms, fin_ms, fin_ms, tipo, tipo, limite),
     ).fetchall()
 
 
@@ -138,3 +140,25 @@ def rutas_fotogramas_de_video(conexion: sqlite3.Connection, video_id: int) -> se
         (video_id,),
     ).fetchall()
     return {fila["ruta_relativa"] for fila in filas}
+def senales_por_tipo(
+    conexion: sqlite3.Connection, analisis_id: int, tipo: str
+) -> list[sqlite3.Row]:
+    return conexion.execute(
+        "SELECT inicio_ms, fin_ms, valor, confianza FROM senales "
+        "WHERE analisis_id = ? AND tipo = ? ORDER BY inicio_ms, fin_ms",
+        (analisis_id, tipo),
+    ).fetchall()
+def ids_en_curso_de_trabajo(conexion: sqlite3.Connection, trabajo_id: int) -> list[int]:
+    return [int(fila["id"]) for fila in conexion.execute(
+        "SELECT id FROM analisis WHERE trabajo_id = ? AND estado = 'en_curso'", (trabajo_id,)
+    ).fetchall()]
+def trabajos_en_curso_de_video(conexion: sqlite3.Connection, video_id: int) -> list[sqlite3.Row]:
+    """Trabajo asociado a cada análisis que está en curso. El trabajo puede haber terminado ya."""
+    return conexion.execute(
+        "SELECT trabajo_id FROM analisis WHERE video_id = ? AND estado = 'en_curso'",
+        (video_id,),
+    ).fetchall()
+def borrar_analisis_de_video(conexion: sqlite3.Connection, video_id: int) -> int:
+    """Borra los análisis del video. Sus señales y fotogramas se borran en cascada."""
+    cursor = conexion.execute("DELETE FROM analisis WHERE video_id = ?", (video_id,))
+    return cursor.rowcount

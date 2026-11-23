@@ -202,6 +202,14 @@ def confirmar_segmento(
     return cursor.rowcount
 
 
+def segmentos_pendientes(
+    conexion: sqlite3.Connection, trabajo_id: int, tipo: str
+) -> list[sqlite3.Row]:
+    return conexion.execute(
+        "SELECT indice, inicio_ms, fin_ms FROM segmentos_trabajo "
+        "WHERE trabajo_id = ? AND tipo_analisis = ? AND estado = 'pendiente' ORDER BY indice",
+        (trabajo_id, tipo),
+    ).fetchall()
 def obtener_segmento(
     conexion: sqlite3.Connection, trabajo_id: int, tipo: str, indice: int
 ) -> sqlite3.Row | None:

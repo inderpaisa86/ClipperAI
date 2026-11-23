@@ -36,7 +36,7 @@ class SinMetodo:
 
 
 def _senal(**cambios) -> Senal:
-    datos = {"tipo": "escena", "inicio_ms": 0, "fin_ms": 1000, "valor": 0.5, "confianza": 0.9}
+    datos = {"tipo": "energia_audio", "inicio_ms": 0, "fin_ms": 1000, "valor": 0.5, "confianza": 0.9}
     datos.update(cambios)
     return Senal(**datos)
 
@@ -54,6 +54,8 @@ def test_senal_de_duracion_cero_es_valida_para_eventos_puntuales():
     "cambios",
     [
         {"tipo": "Escena"},
+        {"tipo": "escena"},
+        {"tipo": "movimiento"},
         {"tipo": "escena-x"},
         {"tipo": ""},
         {"tipo": None},

@@ -1,7 +1,7 @@
 # ClipperAI: Arquitectura técnica
 
 **Versión:** 1.6
-**Estado:** Fase 1 completa (backend, frontend, proxy y Módulo 1 de videos). Módulo 2 en curso: cola de trabajos (Etapa 1) y estructura de análisis con contrato de analizadores y API de consulta (Etapa 2) implementadas. Sin analizadores registrados todavía. Pendiente de autorización la Etapa 3.
+**Estado:** Fase 1 completa (backend, frontend, proxy y Módulo 1 de videos). Módulo 2 en curso: cola de trabajos (Etapa 1), estructura de análisis con contrato de analizadores y API de consulta (Etapa 2), y analizador de audio con limpieza de datos derivados (Etapa 3). El analizador de audio está registrado y se inicia con `POST /api/v1/videos/{id}/analisis` (D-053). Vocabulario de señales cerrado (D-052) y umbral vigente (D-051). El análisis tiene los estados `pendiente`, `en_curso`, `completado`, `fallido` y `cancelado` (D-055). Una cancelación no conserva señales parciales (D-057). Decisiones D-046 a D-057.
 **Tipo:** Aplicación local de edición inteligente de video.
 
 Las decisiones con su fecha y contexto están en `docs/decisiones.md`. Este documento describe cómo se aplican.
@@ -344,10 +344,10 @@ Todos bajo `/api/v1` y protegidos por token (sección 7).
 | GET | `/proyectos` | Lista los proyectos. Cada uno incluye `cantidad_videos` (D-027). |
 | POST | `/proyectos` | Crea un proyecto. Cuerpo: `{"nombre": "..."}`. Responde con `cantidad_videos: 0`. |
 | GET | `/videos?proyecto_id=n` | Lista los videos de un proyecto, con estado de disponibilidad. |
-| POST | `/videos` | Registra un video por referencia. Cuerpo: `{"proyecto_id": n, "ruta": "..."}`. Responde 201. |
-| POST | `/videos/seleccion` | Abre el selector nativo. Responde `{"ruta": "..."}` o `{"ruta": null}`. |
-| GET | `/videos/{id}` | Devuelve los metadatos de un video. |
-| DELETE | `/videos/{id}` | Elimina el registro. Responde 204. El archivo original no cambia. |
+| POST | `/videos` | Registra un video. Cuerpo: `{"proyecto_id": n, "ruta": "..."}` o `{"proyecto_id": n, "seleccion_id": "..."}`. Responde 201. |
+| POST | `/videos/seleccion` | Abre el selector nativo. Responde `{"seleccion_id": "...", "nombre_archivo": "..."}` o `{"seleccion_id": null, "nombre_archivo": null}`. La ruta nunca sale del backend (D-047). |
+| GET | `/videos/{id}` | Devuelve los metadatos de un video, con `nombre_archivo` y sin ruta. |
+| DELETE | `/videos/{id}` | Elimina el registro, sus análisis y sus miniaturas. Responde 204. El archivo original no cambia (D-046). Responde 409 si hay un análisis activo. |
 | GET | `/videos/{id}/stream` | Transmite el original con soporte HTTP Range (D-025). |
 
 Códigos de error: 404 (no existe), 409 (duplicado en el proyecto), 422 (archivo o formato no válido), 501 (selector no disponible), 503 (FFprobe no disponible).

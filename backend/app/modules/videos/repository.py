@@ -37,6 +37,10 @@ def obtener(conexion: sqlite3.Connection, video_id: int) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def ids(conexion: sqlite3.Connection) -> set[int]:
+    return {int(fila["id"]) for fila in conexion.execute("SELECT id FROM videos").fetchall()}
+
+
 def contar_por_proyecto(conexion: sqlite3.Connection, proyecto_id: int) -> int:
     fila = conexion.execute(
         "SELECT COUNT(*) AS cantidad FROM videos WHERE proyecto_id = ?", (proyecto_id,)
@@ -52,7 +56,9 @@ def contar_por_proyectos(conexion: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def eliminar(conexion: sqlite3.Connection, video_id: int) -> bool:
-    """Borra solo la fila de SQLite. El archivo original no se toca."""
+    """Borra solo la fila de SQLite. No hace commit: la transacción la cierra quien llama.
+
+    El archivo original no se toca.
+    """
     cursor = conexion.execute("DELETE FROM videos WHERE id = ?", (video_id,))
-    conexion.commit()
     return cursor.rowcount > 0

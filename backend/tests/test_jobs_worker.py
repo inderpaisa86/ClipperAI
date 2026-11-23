@@ -76,6 +76,17 @@ def _esperar(condicion, segundos: float = 60.0, mensaje: str = "Tiempo agotado")
     raise AssertionError(mensaje)
 
 
+def _esperar_valor(funcion, mensaje: str, segundos: float = 60.0):
+    """Espera hasta que `funcion` devuelva un valor distinto de None. Solo espera la condición, no reintenta errores."""
+    limite = time.monotonic() + segundos
+    while time.monotonic() < limite:
+        valor = funcion()
+        if valor is not None:
+            return valor
+        time.sleep(0.1)
+    raise AssertionError(mensaje)
+
+
 def _esperar_estado(entorno, trabajo_id: int, estado: str, segundos: float = 60.0) -> dict:
     _esperar(
         lambda: _consultar(entorno, trabajo_id)["estado"] == estado,
@@ -163,6 +174,15 @@ def test_cancelar_trabajo_en_cola_impide_su_ejecucion(entorno):
         worker.detener()
 
 
+def _pid_publicado(ruta: Path) -> int | None:
+    """PID que el nieto publicó con os.replace, o None si aún no existe el archivo final."""
+    try:
+        texto = ruta.read_text(encoding="ascii")
+    except FileNotFoundError:
+        return None
+    return int(texto) if texto.isdigit() else None
+
+
 @pytest.mark.skipif(not ES_WINDOWS, reason="Verificación de descendientes con Job Object: Windows")
 def test_cancelacion_mata_al_proceso_nieto(entorno):
     trabajo_id = _crear(entorno, "diagnostico_proceso_nieto", {"segundos": 60})
@@ -170,8 +190,7 @@ def test_cancelacion_mata_al_proceso_nieto(entorno):
     worker.iniciar()
     try:
         ruta_nieto = _directorio(entorno, trabajo_id) / "nieto.pid"
-        _esperar(lambda: ruta_nieto.exists() and ruta_nieto.read_text(encoding="ascii").isdigit())
-        nieto = int(ruta_nieto.read_text(encoding="ascii"))
+        nieto = _esperar_valor(lambda: _pid_publicado(ruta_nieto), "El nieto no publicó su PID.")
         assert plataforma.identidad_proceso(nieto) is not None
 
         conexion = conectar(entorno["db"])
@@ -194,7 +213,7 @@ def test_completar_no_deja_procesos_huerfanos(entorno):
     try:
         _esperar_estado(entorno, trabajo_id, "completado")
         ruta_nieto = _directorio(entorno, trabajo_id) / "nieto.pid"
-        nieto = int(ruta_nieto.read_text(encoding="ascii"))
+        nieto = _esperar_valor(lambda: _pid_publicado(ruta_nieto), "El nieto no publicó su PID.")
         _esperar(lambda: plataforma.identidad_proceso(nieto) is None, 15, "El nieto sobrevivió al trabajo.")
     finally:
         worker.detener()

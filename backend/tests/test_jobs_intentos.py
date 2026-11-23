@@ -43,7 +43,7 @@ def test_parada_ordenada_no_consume_intentos(conexion):
     assert _intentos(conexion, trabajo_id) == 1
 
     # max_intentos=1 deja claro que la parada no se evalúa contra el límite.
-    resultado = service.cerrar_tras_proceso(conexion, trabajo_id, token, None, True)
+    resultado = service.cerrar_tras_proceso(conexion, trabajo_id, token, None, "parada")
 
     assert resultado == "reencolado"
     respuesta = service.consultar(conexion, trabajo_id)
@@ -62,7 +62,7 @@ def test_token_anterior_no_puede_confirmar_tras_parada(conexion):
     token_anterior = "b" * 32
     service.reclamar_siguiente(conexion, token_anterior)
     service.marcar_segmento_procesando(conexion, trabajo_id, token_anterior, "audio", 0)
-    service.cerrar_tras_proceso(conexion, trabajo_id, token_anterior, None, True)
+    service.cerrar_tras_proceso(conexion, trabajo_id, token_anterior, None, "parada")
 
     _afirmar_token_invalidado(conexion, trabajo_id, token_anterior)
 
@@ -77,7 +77,7 @@ def test_reasignacion_usa_token_nuevo_y_cuenta_un_solo_intento(conexion):
     token_anterior = "c" * 32
     token_nuevo = "d" * 32
     service.reclamar_siguiente(conexion, token_anterior)
-    service.cerrar_tras_proceso(conexion, trabajo_id, token_anterior, None, True)
+    service.cerrar_tras_proceso(conexion, trabajo_id, token_anterior, None, "parada")
 
     assert service.reclamar_siguiente(conexion, token_nuevo) == trabajo_id
     assert _intentos(conexion, trabajo_id) == 1
@@ -90,7 +90,7 @@ def test_paradas_repetidas_no_acumulan_intentos(conexion):
     for numero in range(4):
         token = f"{numero}" * 32
         assert service.reclamar_siguiente(conexion, token) == trabajo_id
-        assert service.cerrar_tras_proceso(conexion, trabajo_id, token, None, True) == "reencolado"
+        assert service.cerrar_tras_proceso(conexion, trabajo_id, token, None, "parada") == "reencolado"
     assert service.consultar(conexion, trabajo_id)["intentos"] == 0
     assert service.consultar(conexion, trabajo_id)["estado"] == "en_cola"
 
@@ -101,7 +101,7 @@ def test_parada_con_cancelacion_pendiente_cancela(conexion):
     service.reclamar_siguiente(conexion, token)
     service.cancelar(conexion, trabajo_id)
 
-    assert service.cerrar_tras_proceso(conexion, trabajo_id, token, None, True) == "cancelado"
+    assert service.cerrar_tras_proceso(conexion, trabajo_id, token, None, "parada") == "cancelado"
     assert service.consultar(conexion, trabajo_id)["estado"] == "cancelado"
 
 
@@ -123,7 +123,7 @@ def test_proceso_sin_confirmacion_consume_el_intento(conexion):
     token = "7" * 32
     service.reclamar_siguiente(conexion, token)
 
-    assert service.cerrar_tras_proceso(conexion, trabajo_id, token, 0, False) == "fallido"
+    assert service.cerrar_tras_proceso(conexion, trabajo_id, token, 0, "salida") == "fallido"
     assert service.consultar(conexion, trabajo_id)["intentos"] == 1
 
 

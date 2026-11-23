@@ -168,10 +168,10 @@ def test_endpoint_de_seleccion_devuelve_null_al_cancelar(cliente, monkeypatch):
     respuesta = cliente.post("/api/v1/videos/seleccion")
 
     assert respuesta.status_code == 200
-    assert respuesta.json() == {"ruta": None}
+    assert respuesta.json() == {"seleccion_id": None, "nombre_archivo": None}
 
 
-def test_endpoint_de_seleccion_devuelve_ruta_elegida(cliente, monkeypatch, tmp_path):
+def test_endpoint_de_seleccion_guarda_la_ruta_y_responde_identificador(cliente, monkeypatch, tmp_path):
     elegida = tmp_path / "elegido.mp4"
     monkeypatch.setattr(
         "app.modules.videos.router.seleccionar_video", lambda sistema: elegida
@@ -179,7 +179,57 @@ def test_endpoint_de_seleccion_devuelve_ruta_elegida(cliente, monkeypatch, tmp_p
 
     respuesta = cliente.post("/api/v1/videos/seleccion")
 
-    assert respuesta.json() == {"ruta": str(elegida)}
+    cuerpo = respuesta.json()
+    assert respuesta.status_code == 200
+    assert set(cuerpo) == {"seleccion_id", "nombre_archivo"}
+    assert cuerpo["nombre_archivo"] == "elegido.mp4"
+    assert cuerpo["seleccion_id"]
+    assert str(tmp_path) not in respuesta.text
+
+
+@requiere_ffmpeg
+def test_importar_con_seleccion_usa_la_ruta_guardada_una_sola_vez(cliente, monkeypatch, generar_video):
+    proyecto_id = crear_proyecto(cliente)
+    elegida = generar_video("desde_selector.mp4")
+    monkeypatch.setattr(
+        "app.modules.videos.router.seleccionar_video", lambda sistema: elegida
+    )
+    seleccion = cliente.post("/api/v1/videos/seleccion").json()
+
+    primera = cliente.post(
+        "/api/v1/videos",
+        json={"proyecto_id": proyecto_id, "seleccion_id": seleccion["seleccion_id"]},
+    )
+    assert primera.status_code == 201, primera.text
+    assert primera.json()["nombre_archivo"] == "desde_selector.mp4"
+
+    segunda = cliente.post(
+        "/api/v1/videos",
+        json={"proyecto_id": proyecto_id, "seleccion_id": seleccion["seleccion_id"]},
+    )
+    assert segunda.status_code == 422
+    assert segunda.json()["detalle"].startswith("La selección caducó")
+
+
+def test_importar_con_seleccion_desconocida_falla_sin_detalles(cliente):
+    proyecto_id = crear_proyecto(cliente)
+    respuesta = cliente.post(
+        "/api/v1/videos",
+        json={"proyecto_id": proyecto_id, "seleccion_id": "no-existe"},
+    )
+    assert respuesta.status_code == 422
+    assert "no-existe" not in respuesta.text
+
+
+def test_importar_exige_ruta_o_seleccion_pero_no_ambas(cliente):
+    proyecto_id = crear_proyecto(cliente)
+    ninguna = cliente.post("/api/v1/videos", json={"proyecto_id": proyecto_id})
+    ambas = cliente.post(
+        "/api/v1/videos",
+        json={"proyecto_id": proyecto_id, "ruta": "C:/x.mp4", "seleccion_id": "abc"},
+    )
+    assert ninguna.status_code == 422
+    assert ambas.status_code == 422
 
 
 def test_subprocess_se_invoca_sin_shell(monkeypatch):

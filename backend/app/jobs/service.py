@@ -82,8 +82,12 @@ def crear(
     tipo: str,
     payload: dict[str, Any],
     segmentos: Iterable[tuple[str, int, int, int]] = (),
+    al_insertar: Callable[[sqlite3.Connection, int], None] | None = None,
 ) -> int:
-    """Crea un trabajo en cola. Solo el código del servidor llama a esta función, nunca un cliente HTTP."""
+    """Crea un trabajo en cola. Solo el código del servidor llama a esta función, nunca un cliente HTTP.
+    `al_insertar` recibe el id nuevo dentro de la misma transacción. Si lanza una excepción, no se crea
+    el trabajo. Así un módulo puede registrar su propio estado junto con el trabajo.
+    """
     if not tareas.existe(tipo):
         raise SolicitudInvalida("Tipo de trabajo no admitido.")
     datos = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -93,7 +97,21 @@ def crear(
     with _transaccion(conexion):
         trabajo_id = repository.insertar_trabajo(conexion, tipo, datos, ahora)
         repository.insertar_segmentos(conexion, trabajo_id, segmentos, ahora)
+        if al_insertar is not None:
+            al_insertar(conexion, trabajo_id)
     return trabajo_id
+def estado(conexion: sqlite3.Connection, trabajo_id: int) -> str | None:
+    """Estado actual del trabajo, o None si no existe. Otros módulos lo usan para saber si un trabajo sigue vivo."""
+    fila = repository.obtener(conexion, trabajo_id)
+    return None if fila is None else str(fila["estado"])
+def segmentos_pendientes(
+    conexion: sqlite3.Connection, trabajo_id: int, tipo: str
+) -> list[tuple[int, int, int]]:
+    """Segmentos de un tipo que aún no se completaron, como (indice, inicio_ms, fin_ms), en orden."""
+    return [
+        (int(fila["indice"]), int(fila["inicio_ms"]), int(fila["fin_ms"]))
+        for fila in repository.segmentos_pendientes(conexion, trabajo_id, tipo)
+    ]
 
 
 def consultar(conexion: sqlite3.Connection, trabajo_id: int) -> dict[str, Any]:
@@ -107,6 +125,7 @@ def cancelar(conexion: sqlite3.Connection, trabajo_id: int) -> dict[str, Any]:
         fila = _fila_o_error(conexion, trabajo_id)
         if fila["estado"] == "en_cola":
             repository.cancelar_en_cola(conexion, trabajo_id, ahora)
+            _al_terminar(conexion, trabajo_id, fila["tipo"], "cancelado", None)
         elif fila["estado"] == "ejecutando":
             repository.marcar_cancelacion_en_ejecucion(conexion, trabajo_id, ahora)
     return consultar(conexion, trabajo_id)
@@ -168,18 +187,34 @@ def completar(conexion: sqlite3.Connection, trabajo_id: int, token: str) -> bool
 def fallar(conexion: sqlite3.Connection, trabajo_id: int, token: str, mensaje: str) -> bool:
     ahora = ahora_iso()
     with _transaccion(conexion):
-        if repository.terminar(conexion, trabajo_id, token, "fallido", mensaje_seguro(mensaje), False, ahora) != 1:
+        texto = mensaje_seguro(mensaje)
+        if repository.terminar(conexion, trabajo_id, token, "fallido", texto, False, ahora) != 1:
             return False
         repository.cambiar_segmentos_procesando(conexion, trabajo_id, "fallido", ahora)
+        _al_terminar(conexion, trabajo_id, repository.obtener(conexion, trabajo_id)["tipo"], "fallido", texto)
     return True
 
 
+MOTIVOS_TERMINACION = frozenset({"salida", "parada", "cancelacion_forzada"})
+
+
+def _al_terminar(
+    conexion: sqlite3.Connection, trabajo_id: int, tipo: str, estado: str, error: str | None
+) -> None:
+    """Llama al gancho de cierre sin éxito del tipo, si lo tiene. Corre en la misma transacción que el cierre."""
+    gancho = tareas.gancho_terminar(tipo)
+    if gancho is not None:
+        gancho(conexion, trabajo_id, estado, error)
+
+
 def cancelar_ejecucion(conexion: sqlite3.Connection, trabajo_id: int, token: str) -> bool:
+    """Cierre pedido por el propio proceso del trabajo tras detectar la cancelación."""
     ahora = ahora_iso()
     with _transaccion(conexion):
         if repository.terminar(conexion, trabajo_id, token, "cancelado", None, False, ahora) != 1:
             return False
         repository.cambiar_segmentos_procesando(conexion, trabajo_id, "fallido", ahora)
+        _al_terminar(conexion, trabajo_id, repository.obtener(conexion, trabajo_id)["tipo"], "cancelado", None)
     return True
 
 
@@ -188,19 +223,30 @@ def cerrar_tras_proceso(
     trabajo_id: int,
     token: str,
     codigo: int | None,
-    deteniendo: bool,
+    motivo: str,
 ) -> str:
-    """Decide el estado tras salir del proceso hijo, si el hijo no lo dejó cerrado."""
+    """Decide el estado final tras salir del proceso hijo, si el hijo no lo dejó cerrado.
+
+    `motivo` dice por qué terminó el proceso, y es lo que separa una cancelación de un fallo:
+    - `cancelacion_forzada`: el supervisor lo terminó tras la gracia de cancelación. Es una cancelación.
+    - `parada`: parada ordenada del worker. Si hay cancelación pedida, es cancelación. Si no, se reencola.
+    - `salida`: el proceso terminó solo. Sin resultado confirmado es un fallo, aunque haya cancelación pedida.
+      Así un error real nunca se registra como cancelación.
+    """
+    if motivo not in MOTIVOS_TERMINACION:
+        raise ValueError("Motivo de terminación no válido.")
     ahora = ahora_iso()
     with _transaccion(conexion):
         fila = repository.obtener_ejecucion(conexion, trabajo_id, token)
         if fila is None:
             return "ya_cerrado"
-        if fila["cancelacion_solicitada"]:
+        cancelacion_pedida = bool(fila["cancelacion_solicitada"])
+        if cancelacion_pedida and motivo in ("cancelacion_forzada", "parada"):
             repository.terminar(conexion, trabajo_id, token, "cancelado", None, False, ahora)
             repository.cambiar_segmentos_procesando(conexion, trabajo_id, "fallido", ahora)
+            _al_terminar(conexion, trabajo_id, fila["tipo"], "cancelado", None)
             return "cancelado"
-        if deteniendo:
+        if motivo == "parada":
             # Parada ordenada: no es un fallo ni un intento real, así que no aplica el límite de intentos.
             if repository.reencolar_por_parada(conexion, trabajo_id, token, ahora) != 1:
                 return "ya_cerrado"
@@ -209,6 +255,7 @@ def cerrar_tras_proceso(
         mensaje = f"El proceso terminó sin confirmar el resultado (código {codigo})."
         repository.terminar(conexion, trabajo_id, token, "fallido", mensaje, False, ahora)
         repository.cambiar_segmentos_procesando(conexion, trabajo_id, "fallido", ahora)
+        _al_terminar(conexion, trabajo_id, fila["tipo"], "fallido", mensaje)
         return "fallido"
 
 
@@ -238,16 +285,17 @@ def _reencolar_o_fallar(
     if fila["cancelacion_solicitada"]:
         repository.terminar(conexion, trabajo_id, token, "cancelado", None, False, ahora)
         repository.cambiar_segmentos_procesando(conexion, trabajo_id, "fallido", ahora)
+        _al_terminar(conexion, trabajo_id, fila["tipo"], "cancelado", None)
         return "cancelado"
     if fila["intentos"] >= max_intentos:
         mensaje = f"El trabajo se interrumpió {fila['intentos']} veces y no se reintentará."
         repository.terminar(conexion, trabajo_id, token, "fallido", mensaje, False, ahora)
         repository.cambiar_segmentos_procesando(conexion, trabajo_id, "fallido", ahora)
+        _al_terminar(conexion, trabajo_id, fila["tipo"], "fallido", mensaje)
         return "fallido"
     repository.reencolar(conexion, trabajo_id, token, ahora)
     repository.cambiar_segmentos_procesando(conexion, trabajo_id, "pendiente", ahora)
     return "reencolado"
-
 
 def listar_ejecucion(conexion: sqlite3.Connection) -> list[sqlite3.Row]:
     return repository.listar_ejecucion(conexion)

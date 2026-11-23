@@ -20,7 +20,9 @@ def test_importa_mp4_valido_con_metadatos(cliente, generar_video):
     assert respuesta.status_code == 201, respuesta.text
     video = respuesta.json()
     assert video["nombre"] == "partida.mp4"
-    assert video["ruta"] == str(ruta)
+    assert video["nombre_archivo"] == "partida.mp4"
+    assert "ruta" not in video
+    assert str(ruta) not in respuesta.text
     assert video["ancho"] == 320
     assert video["alto"] == 240
     assert video["fps"] == pytest.approx(25.0, abs=0.01)
@@ -183,7 +185,8 @@ def test_importa_ruta_en_carpeta_con_tildes_y_espacios(cliente, generar_video, t
     respuesta = importar_video(cliente, proyecto_id, ruta)
 
     assert respuesta.status_code == 201, respuesta.text
-    assert respuesta.json()["ruta"] == str(ruta)
+    assert respuesta.json()["nombre_archivo"] == "partida ñ.mp4"
+    assert str(carpeta) not in respuesta.text
 
 
 @requiere_ffmpeg

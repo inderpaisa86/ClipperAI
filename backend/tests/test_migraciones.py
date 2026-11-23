@@ -11,9 +11,9 @@ def test_migraciones_crean_tablas_y_registran_version(tmp_path):
             fila["name"]
             for fila in conexion.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
-        assert version == 4
+        assert version == 5
         assert {"proyectos", "videos"} <= tablas
-        assert conexion.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conexion.execute("PRAGMA user_version").fetchone()[0] == 5
     finally:
         conexion.close()
 
@@ -27,7 +27,7 @@ def test_migraciones_son_idempotentes(tmp_path):
 
         version = aplicar_migraciones(conexion)
 
-        assert version == 4
+        assert version == 5
         assert conexion.execute("SELECT COUNT(*) FROM proyectos").fetchone()[0] == 1
     finally:
         conexion.close()

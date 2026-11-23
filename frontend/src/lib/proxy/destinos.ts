@@ -1,14 +1,22 @@
 /** Un segmento de ruta solo puede tener letras, números, guion y guion bajo. */
 const SEGMENTO_VALIDO = /^[a-z0-9_-]+$/i;
 
-/** Tipos de valor que admite un parámetro de consulta. Ninguno admite signo ni decimales. */
-export type TipoParametro = "entero_positivo" | "entero_no_negativo";
+/**
+ * Vocabulario cerrado de tipos de señal. Debe coincidir con TIPOS_SENAL_PERMITIDOS en
+ * backend/app/plugins/contrato.py. La prueba test_vocabulario_coincide_con_el_proxy lo verifica.
+ */
+export const TIPOS_SENAL_PERMITIDOS = ["energia_audio", "silencio", "cambio_intensidad"] as const;
 
-const VALIDADORES: Readonly<Record<TipoParametro, RegExp>> = {
+/** Tipos de valor que admite un parámetro de consulta. Ninguno admite signo ni decimales. */
+export type TipoParametro = "entero_positivo" | "entero_no_negativo" | "tipo_senal";
+
+const VALIDADORES: Readonly<Record<TipoParametro, (valor: string) => boolean>> = {
   /** Entero positivo sin ceros a la izquierda. */
-  entero_positivo: /^[1-9]\d{0,9}$/,
+  entero_positivo: (valor) => /^[1-9]\d{0,9}$/.test(valor),
   /** Cero o entero positivo sin ceros a la izquierda. */
-  entero_no_negativo: /^(0|[1-9]\d{0,9})$/,
+  entero_no_negativo: (valor) => /^(0|[1-9]\d{0,9})$/.test(valor),
+  /** Uno de los tipos del vocabulario cerrado. */
+  tipo_senal: (valor) => (TIPOS_SENAL_PERMITIDOS as readonly string[]).includes(valor),
 };
 
 export type MetodoPermitido = "GET" | "POST" | "DELETE";
@@ -43,11 +51,17 @@ const DESTINOS_PERMITIDOS: readonly DestinoPermitido[] = [
   { metodo: "GET", patron: /^jobs\/\d+$/ },
   { metodo: "POST", patron: /^jobs\/\d+\/cancelacion$/ },
   { metodo: "GET", patron: new RegExp(`^videos\\/\\d+\\/analisis$`) },
+  { metodo: "POST", patron: new RegExp(`^videos\\/\\d+\\/analisis$`) },
   { metodo: "GET", patron: new RegExp(`^videos\\/\\d+\\/analisis\\/${ANALIZADOR}$`) },
   {
     metodo: "GET",
     patron: new RegExp(`^videos\\/\\d+\\/analisis\\/${ANALIZADOR}\\/senales$`),
-    parametros: { inicio_ms: "entero_no_negativo", fin_ms: "entero_no_negativo", limite: "entero_positivo" },
+    parametros: {
+      inicio_ms: "entero_no_negativo",
+      fin_ms: "entero_no_negativo",
+      limite: "entero_positivo",
+      tipo: "tipo_senal",
+    },
   },
   {
     metodo: "GET",
@@ -105,7 +119,7 @@ function construirConsulta(
   const salida = new URLSearchParams();
   for (const [clave, valor] of consulta) {
     const tipo = Object.prototype.hasOwnProperty.call(permitidos, clave) ? permitidos[clave] : undefined;
-    if (tipo === undefined || !VALIDADORES[tipo].test(valor)) {
+    if (tipo === undefined || !VALIDADORES[tipo](valor)) {
       return null;
     }
     salida.append(clave, valor);

@@ -28,7 +28,7 @@ def _video(conexion) -> int:
     return insertar_video_directo(conexion, proyecto)
 
 
-def _senal(tipo: str = "escena", inicio: int = 0, fin: int = 1000) -> Senal:
+def _senal(tipo: str = "silencio", inicio: int = 0, fin: int = 1000) -> Senal:
     return Senal(tipo=tipo, inicio_ms=inicio, fin_ms=fin, valor=0.5, confianza=0.8)
 
 
@@ -163,7 +163,7 @@ def test_persistir_exige_que_la_miniatura_exista_en_disco(base):
     video = _video(conexion)
     analisis = service.preparar_analisis(conexion, video, "vision", registro_con(AnalizadorFalso("vision")))
     resultado = ResultadoSegmento(
-        senales=(_senal("brillo"),),
+        senales=(_senal("energia_audio"),),
         fotogramas=(FotogramaProducido(tiempo_ms=800, ruta_relativa=f"work/{video}/fotogramas/800.jpg"),),
     )
     with pytest.raises(NoEncontrado):
@@ -190,9 +190,9 @@ def analisis_con_senales(base):
         analisis.id,
         ResultadoSegmento(
             senales=(
-                _senal("escena", 0, 1000),
-                _senal("movimiento", 900, 2000),
-                _senal("brillo", 5000, 6000),
+                _senal("silencio", 0, 1000),
+                _senal("cambio_intensidad", 900, 2000),
+                _senal("energia_audio", 5000, 6000),
             ),
         ),
     )
@@ -202,7 +202,7 @@ def analisis_con_senales(base):
 def test_listar_senales_devuelve_las_que_se_solapan_ordenadas(analisis_con_senales):
     conexion, _, video = analisis_con_senales
     senales = service.listar_senales(conexion, video, "audio", inicio_ms=950, fin_ms=1100)
-    assert [(s.tipo, s.inicio_ms) for s in senales] == [("escena", 0), ("movimiento", 900)]
+    assert [(s.tipo, s.inicio_ms) for s in senales] == [("silencio", 0), ("cambio_intensidad", 900)]
 
 
 def test_listar_senales_sin_intervalo_respeta_el_limite(analisis_con_senales):

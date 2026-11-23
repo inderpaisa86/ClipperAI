@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 
 import { importarVideo, seleccionarArchivo } from "@/lib/api/videos";
-import type { Video } from "@/lib/api/tipos";
+import type { OrigenVideo, Video } from "@/lib/api/tipos";
 
 type Props = {
   proyectoId: number;
@@ -15,10 +15,10 @@ export function ImportarVideo({ proyectoId, onImportado, onError }: Props) {
   const [ruta, setRuta] = useState("");
   const [ocupado, setOcupado] = useState<null | "seleccion" | "importando">(null);
 
-  async function importar(rutaElegida: string) {
+  async function importar(origen: OrigenVideo) {
     setOcupado("importando");
     try {
-      const video = await importarVideo(proyectoId, rutaElegida);
+      const video = await importarVideo(proyectoId, origen);
       onImportado(video);
       setRuta("");
     } catch (err) {
@@ -31,24 +31,24 @@ export function ImportarVideo({ proyectoId, onImportado, onError }: Props) {
   async function elegirConSelector() {
     onError("");
     setOcupado("seleccion");
-    let elegida: string | null = null;
+    let seleccionId: string | null = null;
     try {
-      elegida = (await seleccionarArchivo()).ruta;
+      seleccionId = (await seleccionarArchivo()).seleccion_id;
     } catch (err) {
       onError(mensajeDe(err));
       setOcupado(null);
       return;
     }
     setOcupado(null);
-    if (elegida !== null) {
-      await importar(elegida);
+    if (seleccionId !== null) {
+      await importar({ seleccion_id: seleccionId });
     }
   }
 
   function enviarRuta(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
     onError("");
-    void importar(ruta);
+    void importar({ ruta });
   }
 
   return (

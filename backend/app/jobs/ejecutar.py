@@ -11,6 +11,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from app import composicion
 from app.core import plataforma
 from app.db.conexion import conectar
 from app.jobs import service, tareas
@@ -32,6 +33,7 @@ def ejecutar(
     directorio: Path,
     intervalo_latido: float,
 ) -> int:
+    composicion.registrar()
     conexion = conectar(ruta_db)
     contexto: ContextoTrabajo | None = None
     try:

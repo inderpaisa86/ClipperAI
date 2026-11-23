@@ -2,6 +2,9 @@
 
 Cada miniatura va en `work/<video_id>/fotogramas/<tiempo_ms>.jpg`. La escritura pasa por un
 temporal `*.tmp` que se renombra con `os.replace`, así que un archivo final nunca queda a medias.
+
+Las operaciones de borrado no siguen enlaces simbólicos ni junctions en ninguna parte de la ruta.
+Solo borran miniaturas `.jpg` y temporales `.tmp` dentro de `work/<video_id>/fotogramas`.
 """
 
 import os
@@ -14,6 +17,8 @@ from app.plugins.contrato import ContratoInvalido, FotogramaProducido
 TAMANO_MAXIMO_MINIATURA_BYTES = 2 * 1024 * 1024
 CABECERA_JPEG = b"\xff\xd8\xff"
 SUFIJO_TEMPORAL = ".tmp"
+SUFIJO_MINIATURA = ".jpg"
+DIRECTORIO_WORK = "work"
 
 
 def ruta_relativa_fotograma(video_id: int, tiempo_ms: int) -> str:
@@ -64,24 +69,107 @@ def verificar_fotograma(raiz: RaizDatos, ruta_relativa: str) -> Path:
     return ruta
 
 
+def es_enlace(ruta: Path) -> bool:
+    """Enlace simbólico o junction de Windows. `is_symlink` no detecta los junctions."""
+    if ruta.is_symlink():
+        return True
+    es_junction = getattr(ruta, "is_junction", None)
+    return es_junction is not None and es_junction()
+
+
+def _directorio_seguro(raiz: RaizDatos, *partes: str) -> Path | None:
+    """Ruta absoluta de un directorio dentro de la raíz, si toda la cadena existe y no contiene enlaces.
+
+    Devuelve None si algún tramo no existe, es enlace o sale de la raíz.
+    """
+    actual = raiz.raiz
+    for parte in partes:
+        actual = actual / parte
+        if es_enlace(actual) or not actual.is_dir():
+            return None
+    return actual
+
+
+def _borrar_miniaturas_en(directorio: Path) -> tuple[int, int]:
+    """Borra miniaturas y temporales de un directorio. Devuelve (borrados, fallidos). No borra subdirectorios."""
+    borrados = 0
+    fallidos = 0
+    for entrada in directorio.iterdir():
+        nombre = entrada.name
+        if es_enlace(entrada) or not entrada.is_file():
+            continue
+        if not (nombre.endswith(SUFIJO_MINIATURA) or nombre.endswith(SUFIJO_TEMPORAL)):
+            continue
+        try:
+            entrada.unlink()
+            borrados += 1
+        except OSError:
+            fallidos += 1
+    return borrados, fallidos
+
+
+def _quitar_directorio_si_vacio(directorio: Path) -> None:
+    try:
+        directorio.rmdir()
+    except OSError:
+        # Con contenido ajeno o bloqueado, se deja como está.
+        return
+
+
+def borrar_fotogramas_de_video(raiz: RaizDatos, video_id: int) -> tuple[int, int]:
+    """Borra las miniaturas y temporales de un video, y sus directorios si quedan vacíos.
+
+    Devuelve (borrados, fallidos). Un fallo no detiene el resto: el archivo queda huérfano y la
+    limpieza de arranque lo retira más tarde.
+    """
+    directorio = _directorio_seguro(raiz, DIRECTORIO_WORK, str(video_id), "fotogramas")
+    if directorio is None:
+        return 0, 0
+    borrados, fallidos = _borrar_miniaturas_en(directorio)
+    _quitar_directorio_si_vacio(directorio)
+    _quitar_directorio_si_vacio(directorio.parent)
+    return borrados, fallidos
+
+
 def barrer_huerfanos(raiz: RaizDatos, video_id: int, registradas: set[str]) -> int:
     """Borra los fotogramas del video que no tienen fila y los temporales. Devuelve cuántos borró.
 
-    Solo borra archivos regulares dentro del directorio del video. No sigue enlaces ni borra directorios.
     El llamador debe confirmar que no hay un trabajo en ejecución.
     """
-    try:
-        directorio = raiz.resolver(directorio_fotogramas_relativo(video_id))
-    except RutaNoPermitida:
-        return 0
-    if not directorio.is_dir() or directorio.is_symlink():
+    directorio = _directorio_seguro(raiz, DIRECTORIO_WORK, str(video_id), "fotogramas")
+    if directorio is None:
         return 0
     eliminados = 0
     for entrada in directorio.iterdir():
-        if entrada.is_symlink() or not entrada.is_file():
+        if es_enlace(entrada) or not entrada.is_file():
             continue
         relativa = entrada.relative_to(raiz.raiz).as_posix()
         if entrada.name.endswith(SUFIJO_TEMPORAL) or relativa not in registradas:
             entrada.unlink(missing_ok=True)
             eliminados += 1
     return eliminados
+
+
+def barrer_videos_eliminados(raiz: RaizDatos, existentes: set[int]) -> tuple[int, int]:
+    """Borra miniaturas de videos que ya no existen en la base. Devuelve (borrados, fallidos).
+
+    Solo mira directorios `work/<número>` y solo borra miniaturas y temporales dentro de `fotogramas`.
+    Los directorios cuyo nombre no es un número, o que no tienen video registrado pero contienen
+    otra cosa, no se tocan.
+    """
+    raiz_work = _directorio_seguro(raiz, DIRECTORIO_WORK)
+    if raiz_work is None:
+        return 0, 0
+    total_borrados = 0
+    total_fallidos = 0
+    for directorio_video in raiz_work.iterdir():
+        if not directorio_video.name.isdigit() or es_enlace(directorio_video):
+            continue
+        if not directorio_video.is_dir() or int(directorio_video.name) in existentes:
+            continue
+        borrados, fallidos = borrar_fotogramas_de_video(raiz, int(directorio_video.name))
+        total_borrados += borrados
+        total_fallidos += fallidos
+        _quitar_directorio_si_vacio(directorio_video)
+    return total_borrados, total_fallidos
+

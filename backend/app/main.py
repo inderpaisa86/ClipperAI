@@ -5,6 +5,15 @@ from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+from app import composicion
 from app.core.configuracion import (
     HOSTS_PERMITIDOS,
     ORIGENES_PERMITIDOS,
@@ -18,17 +27,29 @@ from app.db.conexion import conectar
 from app.db.migraciones import aplicar_migraciones
 from app.jobs.router import router as router_trabajos
 from app.jobs.worker import Worker
+from app.modules.analisis import service as analisis
 from app.modules.analisis.router import router as router_analisis
 from app.modules.projects.router import router as router_proyectos
 from app.modules.sistema.router import router as router_sistema
 from app.modules.videos.router import router as router_videos
+from app.modules.videos.selecciones import RegistroSelecciones
 
 ENCABEZADO_TOKEN = "X-ClipperAI-Token"
 PREFIJO_API = "/api/v1"
+log = logging.getLogger("clipperai")
+
+
+def _limpiar_huerfanos(conexion, raiz: RaizDatos) -> None:
+    """Retira miniaturas de videos eliminados. Un fallo se registra y no impide arrancar."""
+    try:
+        analisis.limpiar_derivados_huerfanos(conexion, raiz)
+    except Exception:  # noqa: BLE001 - la limpieza nunca debe impedir que la aplicación arranque
+        log.warning("La limpieza de miniaturas huérfanas falló al arrancar.")
 
 
 def crear_aplicacion(configuracion: Configuracion | None = None) -> FastAPI:
     config = configuracion or cargar_configuracion()
+    composicion.registrar()
 
     @asynccontextmanager
     async def ciclo_de_vida(app: FastAPI) -> AsyncIterator[None]:
@@ -36,6 +57,7 @@ def crear_aplicacion(configuracion: Configuracion | None = None) -> FastAPI:
         conexion = conectar(config.ruta_base_datos)
         try:
             aplicar_migraciones(conexion)
+            _limpiar_huerfanos(conexion, RaizDatos(config.data_dir))
         finally:
             conexion.close()
 
@@ -60,6 +82,8 @@ def crear_aplicacion(configuracion: Configuracion | None = None) -> FastAPI:
             config.ruta_token.unlink(missing_ok=True)
 
     app = FastAPI(title="ClipperAI", version="0.1.0", lifespan=ciclo_de_vida)
+    app.state.selecciones = RegistroSelecciones()
+    app.state.lanzadores = composicion.lanzadores()
 
     @app.exception_handler(ErrorAplicacion)
     async def manejar_error_aplicacion(request: Request, error: ErrorAplicacion) -> JSONResponse:

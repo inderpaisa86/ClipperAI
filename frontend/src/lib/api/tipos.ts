@@ -38,7 +38,8 @@ export type Video = {
   id: number;
   proyecto_id: number;
   nombre: string;
-  ruta: string;
+  /** Nombre del archivo original. El backend nunca envía la ruta absoluta. */
+  nombre_archivo: string;
   tamano_bytes: number;
   duracion_segundos: number | null;
   ancho: number;
@@ -51,6 +52,11 @@ export type Video = {
   creado: string;
 };
 
+/** Resultado del selector. Si el usuario cancela, ambos campos son null. La ruta queda en el backend. */
 export type SeleccionArchivo = {
-  ruta: string | null;
+  seleccion_id: string | null;
+  nombre_archivo: string | null;
 };
+
+/** Origen de un video a importar: ruta escrita por el usuario o selección previa del selector. */
+export type OrigenVideo = { ruta: string } | { seleccion_id: string };

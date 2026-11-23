@@ -53,8 +53,8 @@ export function DetalleVideo({ video, onEliminar }: Props) {
       )}
 
       <dl className="detalles">
-        <dt>Ruta original</dt>
-        <dd className="ruta">{video.ruta}</dd>
+        <dt>Archivo original</dt>
+        <dd className="ruta">{video.nombre_archivo}</dd>
 
         <dt>Tamaño</dt>
         <dd>{formatearBytes(video.tamano_bytes)}</dd>

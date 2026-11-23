@@ -28,7 +28,7 @@ def _video_con_analisis(cliente, configuracion) -> int:
             ResultadoSegmento(
                 senales=(
                     Senal(tipo="energia_audio", inicio_ms=0, fin_ms=1000, valor=0.3, confianza=0.9),
-                    Senal(tipo="escena", inicio_ms=4000, fin_ms=5000, valor=0.8, confianza=0.7),
+                    Senal(tipo="cambio_intensidad", inicio_ms=4000, fin_ms=5000, valor=0.8, confianza=0.7),
                 ),
                 fotogramas=(miniatura,),
             ),
@@ -175,8 +175,8 @@ def test_miniatura_con_fila_que_apunta_fuera_del_almacen_no_se_sirve(cliente, co
 
 def test_la_api_de_analisis_es_solo_de_lectura(cliente, configuracion):
     video = _video_con_analisis(cliente, configuracion)
-    assert cliente.post(f"{BASE}/{video}/analisis", json={}).status_code == 405
     assert cliente.delete(f"{BASE}/{video}/analisis/audio").status_code == 405
+    assert cliente.put(f"{BASE}/{video}/analisis").status_code == 405
     assert cliente.post(f"{BASE}/{video}/analisis/audio/senales", json={}).status_code == 405
 
 

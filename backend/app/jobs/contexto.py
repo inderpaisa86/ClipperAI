@@ -52,6 +52,24 @@ class ContextoTrabajo:
         if self._hilo is not None:
             self._hilo.join(timeout=5)
 
+    @property
+    def conexion(self) -> sqlite3.Connection:
+        """Conexión del hilo de la tarea. Solo la usa ese hilo."""
+        return self._conexion
+
+    @property
+    def trabajo_id(self) -> int:
+        return self._trabajo_id
+
+    @property
+    def token(self) -> str:
+        """Token de ejecución vigente. Sin él, la confirmación de resultados lanza ReclamoPerdido."""
+        return self._token
+
+    @property
+    def ruta_db(self) -> Path:
+        return self._ruta_db
+
     def cancelado(self) -> bool:
         return self._cancelado.is_set()
 
