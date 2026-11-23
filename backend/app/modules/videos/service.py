@@ -31,6 +31,9 @@ class DatosAnalisis:
 
     duracion_ms: int | None
     tiene_audio: bool
+    tiene_video: bool = False
+    ancho: int | None = None
+    alto: int | None = None
 
 
 def _es_enlace(ruta: Path) -> bool:
@@ -236,4 +239,7 @@ def datos_para_analisis(conexion: sqlite3.Connection, video_id: int) -> DatosAna
     return DatosAnalisis(
         duracion_ms=None if duracion is None else round(float(duracion) * 1000),
         tiene_audio=fila["codec_audio"] is not None,
+        tiene_video=fila["codec_video"] is not None,
+        ancho=fila["ancho"],
+        alto=fila["alto"],
     )

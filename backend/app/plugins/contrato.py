@@ -17,7 +17,14 @@ LONGITUD_VERSION_MAXIMA = 32
 # Vocabulario cerrado de tipos de señal. Es la única fuente de verdad: el proxy (lib/proxy/destinos.ts)
 # debe tener la misma lista y una prueba lo verifica. Agregar un tipo exige una decisión registrada.
 TIPOS_SENAL_PERMITIDOS: frozenset[str] = frozenset(
-    {"energia_audio", "silencio", "cambio_intensidad"}
+    {
+        "energia_audio",
+        "silencio",
+        "cambio_intensidad",
+        "cambio_escena",
+        "movimiento",
+        "brillo",
+    }
 )
 
 

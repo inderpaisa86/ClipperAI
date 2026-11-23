@@ -341,6 +341,8 @@ def confirmar_segmento(
         return confirmado
 
 
-def hay_trabajo_ejecutandose(conexion: sqlite3.Connection) -> bool:
-    """True si un trabajo pesado está en curso. Otros módulos lo consultan antes de tareas de mantenimiento."""
-    return repository.hay_ejecucion(conexion)
+def hay_trabajo_ejecutandose(conexion: sqlite3.Connection, excepto_trabajo_id: int | None = None) -> bool:
+    """True si un trabajo pesado está en curso. Otros módulos lo consultan antes de tareas de mantenimiento.
+    `excepto_trabajo_id` omite el trabajo que hace la consulta desde su propio proceso.
+    """
+    return repository.hay_ejecucion(conexion, excepto_trabajo_id)

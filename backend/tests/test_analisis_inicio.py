@@ -34,7 +34,10 @@ def _video(cliente, configuracion, *, audio: bool = True, con_archivo: bool = Tr
 def _contar_trabajos(configuracion) -> int:
     conexion = conectar(configuracion.ruta_base_datos)
     try:
-        return conexion.execute("SELECT COUNT(*) FROM trabajos").fetchone()[0]
+        # Cuenta solo los trabajos de audio: el análisis visual también se inicia con POST /analisis.
+        return conexion.execute(
+            "SELECT COUNT(*) FROM trabajos WHERE tipo = 'analisis_audio'"
+        ).fetchone()[0]
     finally:
         conexion.close()
 

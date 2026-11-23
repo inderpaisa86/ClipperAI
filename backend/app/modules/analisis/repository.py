@@ -140,6 +140,23 @@ def rutas_fotogramas_de_video(conexion: sqlite3.Connection, video_id: int) -> se
         (video_id,),
     ).fetchall()
     return {fila["ruta_relativa"] for fila in filas}
+def ultimo_fin_senal(
+    conexion: sqlite3.Connection, analisis_id: int, tipo: str, antes_de_ms: int
+) -> int | None:
+    """Fin más tardío de una señal del tipo que termina antes del tiempo indicado."""
+    fila = conexion.execute(
+        "SELECT MAX(fin_ms) AS fin FROM senales WHERE analisis_id = ? AND tipo = ? AND fin_ms < ?",
+        (analisis_id, tipo, antes_de_ms),
+    ).fetchone()
+    return None if fila["fin"] is None else int(fila["fin"])
+def ultimo_tiempo_fotograma(
+    conexion: sqlite3.Connection, analisis_id: int, antes_de_ms: int
+) -> int | None:
+    fila = conexion.execute(
+        "SELECT MAX(tiempo_ms) AS tiempo FROM fotogramas WHERE analisis_id = ? AND tiempo_ms < ?",
+        (analisis_id, antes_de_ms),
+    ).fetchone()
+    return None if fila["tiempo"] is None else int(fila["tiempo"])
 def senales_por_tipo(
     conexion: sqlite3.Connection, analisis_id: int, tipo: str
 ) -> list[sqlite3.Row]:

@@ -242,16 +242,20 @@ def persistir_resultado(
 
 
 def barrer_fotogramas_huerfanos(
-    conexion: sqlite3.Connection, raiz: RaizDatos, video_id: int
+    conexion: sqlite3.Connection,
+    raiz: RaizDatos,
+    video_id: int,
+    excepto_trabajo: int | None = None,
 ) -> int:
     """Limpia miniaturas sin fila y temporales de un video. Devuelve cuántos archivos borró.
 
     Mantiene el bloqueo de escritura de SQLite durante todo el barrido. Así un trabajo nuevo no puede
     empezar a escribir miniaturas antes de que termine la comparación con la base de datos.
+    `excepto_trabajo` es el trabajo que hace la limpieza desde su propio proceso: no cuenta como ajeno.
     """
     _exigir_video(conexion, video_id)
     with transaccion_inmediata(conexion):
-        if trabajos.hay_trabajo_ejecutandose(conexion):
+        if trabajos.hay_trabajo_ejecutandose(conexion, excepto_trabajo):
             raise Conflicto("Hay un trabajo en ejecución. La limpieza se hará cuando termine.")
         registradas = repository.rutas_fotogramas_de_video(conexion, video_id)
         return almacenamiento.barrer_huerfanos(raiz, video_id, registradas)
@@ -305,6 +309,18 @@ def estado_completado_con_version(
     )
 
 
+def ultimo_fin_senal(
+    conexion: sqlite3.Connection, analisis_id: int, tipo: str, antes_de_ms: int
+) -> int | None:
+    """Fin de la última señal de un tipo que termina antes de `antes_de_ms`. Para procesos internos.
+    Lo usa un segmento para respetar la distancia mínima entre detecciones de los segmentos anteriores.
+    """
+    return repository.ultimo_fin_senal(conexion, analisis_id, tipo, antes_de_ms)
+def ultimo_tiempo_fotograma(
+    conexion: sqlite3.Connection, analisis_id: int, antes_de_ms: int
+) -> int | None:
+    """Tiempo del último fotograma guardado antes de `antes_de_ms`. Para procesos internos."""
+    return repository.ultimo_tiempo_fotograma(conexion, analisis_id, antes_de_ms)
 def serie_senales(
     conexion: sqlite3.Connection, analisis_id: int, tipo: str
 ) -> list[sqlite3.Row]:

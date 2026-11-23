@@ -889,3 +889,98 @@ Reglas:
 5. **Consolidación.** Los silencios y cambios se escriben junto con el estado `completado`, en la misma transacción. Un análisis cancelado antes de la consolidación no tiene silencios parciales.
 
 **Consecuencias.** Cancelar un análisis largo y reintentarlo repite el cálculo de los segmentos ya confirmados. Es el costo de no conservar resultados parciales. Si ese costo resulta alto, se puede cambiar a conservación con reemplazo seguro en una decisión posterior.
+
+---
+
+## D-058. Muestreo visual a 1 fps, decodificación en color y parámetros centralizados
+**Fecha:** Módulo 2, Etapa 4.
+**Estado:** Implementada. Reemplaza en el analizador visual dos partes de D-031: la tasa de 4 fps y la imagen en gris de 320 × 180.
+
+**Decisión.**
+
+- El analizador visual muestrea una cuadrícula global cada `intervalo_muestreo_ms` = 1000 ms. El intervalo sale de la especificación de la etapa. D-031 fijaba 4 fps para la decodificación.
+- FFmpeg entrega imágenes BGR de 320 px de ancho con la relación de aspecto del original (`scale` con tamaño explícito, `flags=area`). Se usa color porque las miniaturas se guardan en JPEG para inspección visual. Las medidas se calculan sobre una copia en gris de 160 px.
+- `hilos_ffmpeg` = 8. Es el valor que D-031 eligió por medición en la Etapa 0, no uno nuevo.
+- Todos los parámetros viven en `backend/app/modules/vision/parametros.py` (`ParametrosVision`). Su documentación y valores por defecto están en `docs/senales.md`. Cambiar cualquiera exige subir la versión del analizador (D-015).
+- La versión inicial del analizador es `video` 1.0.0.
+
+**Alternativas descartadas.**
+
+- Mantener 4 fps y muestrear en Python. Costaba más decodificación sin beneficio para las señales de 1 s.
+- Decodificar en gris para las miniaturas. Las miniaturas en gris dan menos información al inspeccionar el video.
+
+**Consecuencias.** La cuadrícula y las resoluciones son parte del contrato del analizador. Un cambio de cualquiera invalida los resultados previos.
+
+---
+
+## D-059. Métricas clásicas, normalización y confianza fija por método
+**Fecha:** Módulo 2, Etapa 4.
+**Estado:** Implementada. Amplía el vocabulario de D-052 con los tipos visuales, siguiendo su punto 5.
+
+**Decisión.**
+
+- Vocabulario visual: `brillo`, `movimiento` y `cambio_escena`. Se agregan a `TIPOS_SENAL_PERMITIDOS`, al proxy y a la prueba de paridad.
+- `brillo`: luminancia media de la imagen en gris, dividida entre 255. Medida puntual en el instante de la muestra.
+- `movimiento`: fracción de píxeles cuya diferencia de gris con la muestra anterior es de al menos 20 niveles. El umbral ignora el ruido de compresión. Intervalo entre muestras consecutivas.
+- `cambio_escena`: fracción de píxeles cuya diferencia de gris es de al menos 30 niveles. Se declara un corte si la fracción llega a 0,35 y han pasado al menos 2 s desde el corte anterior. El valor es esa fracción. Intervalo entre muestras consecutivas.
+- Confianza fija por método: 1,0 para brillo (medición directa), 0,6 para movimiento (la diferencia entre fotogramas no separa cámara de objetos) y 0,8 para escena (fiable en cortes, no en fundidos).
+- No se usa ningún modelo ni clasificación semántica (D-003, D-059).
+
+**Alternativas descartadas.**
+
+- Histogramas para detectar escenas. Son sensibles a cambios de iluminación, que la especificación pide ignorar.
+- Flujo óptico. Añade más cálculo y no mejora la señal que se necesita.
+
+**Consecuencias.** Los umbrales del método clásico no son universales. Un video con cámara muy móvil puede producir cortes falsos, y los fundidos lentos solo aparecen como cambio de brillo. Ambas limitaciones están en `docs/senales.md`.
+
+---
+
+## D-060. Segmentos con estado previo leído de la base
+**Fecha:** Módulo 2, Etapa 4.
+**Estado:** Implementada.
+
+**Decisión.**
+
+- Un segmento de 60 s posee las muestras cuyo tiempo cae en `[inicio, fin)`. Decodifica una muestra previa, que pertenece al segmento anterior, solo para comparar. Así ninguna muestra se procesa dos veces ni se pierde en el borde.
+- La cuadrícula es global (`t = k × intervalo`). Cada segmento decodifica desde el anclaje `(primera_muestra_propia − 1) × intervalo`.
+- Dos reglas dependen de lo ya confirmado: la distancia mínima entre cortes y la distancia mínima entre fotogramas representativos, además de la distinción visual con el último fotograma. El servicio de trabajos lee ese estado de la base al empezar cada segmento: `fin_ms` del último `cambio_escena` anterior, y tiempo y firma del último fotograma guardado. Como solo cuentan segmentos confirmados, reanudar produce los mismos resultados.
+- La firma del último fotograma se calcula a partir de su miniatura JPEG guardada. No se guarda aparte.
+- El barrido de miniaturas sin fila (D-032) se ejecuta al empezar cada trabajo visual. No cuenta como trabajo ajeno el propio trabajo, porque el worker tiene un solo trabajo en ejecución. Para eso `jobs.hay_trabajo_ejecutandose` acepta `excepto_trabajo_id`. D-032 pedía el barrido antes de cada análisis y este es el primer analizador con miniaturas que lo usa.
+
+**Alternativas descartadas.**
+
+- Pasar el estado entre segmentos en memoria. Un reinicio lo perdería y los resultados dependerían del orden de ejecución.
+- Un segmento de consolidación que recalcule cortes sobre toda la serie. Obligaría a guardar la serie de diferencias de cada muestra, que no tiene tipo en el vocabulario.
+
+**Consecuencias.** Un segmento depende de los segmentos anteriores confirmados, así que no se puede procesar fuera de orden.
+
+---
+
+## D-061. Fotogramas representativos por segmento
+**Fecha:** Módulo 2, Etapa 4.
+**Estado:** Implementada.
+
+**Decisión.**
+
+- Un candidato es un corte aceptado (puntuación 1 + fracción) o un fotograma con movimiento de al menos 0,10 (puntuación igual a la fracción).
+- Se eligen los de mayor puntuación, en orden. Un candidato se descarta si queda a menos de 5 s de un elegido o de la referencia previa, o si su huella visual (16 × 9 en gris) está a menos de 0,05 de la de un elegido o de la referencia previa.
+- El límite es proporcional a la duración del segmento: `maximo_fotogramas_por_minuto` (6) × duración / 60 s, con mínimo 1. Con segmentos de 60 s el límite es de 6 por segmento.
+- Cada fotograma elegido se guarda en `work/<video_id>/fotogramas/<tiempo_ms>.jpg` con escritura atómica, y se registra en `fotogramas` en la misma transacción que las señales (D-032, D-044). Ningún fotograma no elegido se guarda.
+
+**Consecuencias.** La cantidad de miniaturas por video queda acotada a 6 por minuto, pero el peso en disco depende de la resolución y la calidad JPEG.
+
+---
+
+## D-062. Cola, cierre y migraciones del análisis visual
+**Fecha:** Módulo 2, Etapa 4.
+**Estado:** Implementada. Sin migración nueva.
+
+**Decisión.**
+
+- Tipo de trabajo `analisis_video`, con segmentos `fotogramas` (uno por minuto) y un segmento final `cierre`. El segmento `cierre` marca el análisis como `completado` en la misma transacción que su confirmación, igual que la consolidación del audio.
+- Los ganchos de cancelación y fallo son los del módulo de análisis (`cerrar_por_cancelacion` y `cerrar_por_fallo`), así que D-056 y D-057 se aplican sin cambios: una cancelación borra señales y fotogramas, y un fallo conserva los segmentos confirmados.
+- Lanzador `video` en `composicion.lanzadores()`. El endpoint `POST /api/v1/videos/{id}/analisis` lo inicia junto con audio. No se creó ningún endpoint nuevo.
+- Migración: ninguna. El esquema no tiene listas cerradas para `senales.tipo` ni para `analisis.analizador` (usan GLOB y CHECK de formato). Las tablas existentes bastan.
+- `DatosAnalisis` (módulo `videos`) expone `tiene_video`, `ancho` y `alto` para el analizador. Son lectura de datos del video, sin cambios en su tabla.
+
+**Consecuencias.** `POST /analisis` inicia dos trabajos cuando el video tiene audio y video. Las pruebas que contaban trabajos ahora cuentan solo los de audio, porque ese era su propósito.

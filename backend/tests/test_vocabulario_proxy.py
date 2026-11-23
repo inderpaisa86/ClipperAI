@@ -26,7 +26,14 @@ def test_vocabulario_del_backend_y_del_proxy_son_iguales():
 
 
 def test_el_vocabulario_actual_es_el_aprobado():
-    assert set(TIPOS_SENAL_PERMITIDOS) == {"energia_audio", "silencio", "cambio_intensidad"}
+    assert set(TIPOS_SENAL_PERMITIDOS) == {
+        "energia_audio",
+        "silencio",
+        "cambio_intensidad",
+        "cambio_escena",
+        "movimiento",
+        "brillo",
+    }
 
 
 _SCRIPT = """
@@ -48,6 +55,9 @@ def test_proxy_valida_el_parametro_tipo_con_el_vocabulario_cerrado(tmp_path):
         ["GET", _RUTA_SENALES, "tipo=silencio"],
         ["GET", _RUTA_SENALES, "tipo=energia_audio"],
         ["GET", _RUTA_SENALES, "tipo=cambio_intensidad"],
+        ["GET", _RUTA_SENALES, "tipo=cambio_escena"],
+        ["GET", _RUTA_SENALES, "tipo=movimiento"],
+        ["GET", _RUTA_SENALES, "tipo=brillo"],
         ["GET", _RUTA_SENALES, "tipo=escena"],
         ["GET", _RUTA_SENALES, "tipo=SILENCIO"],
         ["GET", _RUTA_SENALES, "tipo="],
@@ -68,6 +78,9 @@ def test_proxy_valida_el_parametro_tipo_con_el_vocabulario_cerrado(tmp_path):
     assert resultado.returncode == 0, resultado.stderr
     obtenidos = json.loads(resultado.stdout.strip().splitlines()[-1])
     esperados = [
+        {"ok": True, "estado": 200},
+        {"ok": True, "estado": 200},
+        {"ok": True, "estado": 200},
         {"ok": True, "estado": 200},
         {"ok": True, "estado": 200},
         {"ok": True, "estado": 200},

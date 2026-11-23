@@ -3,13 +3,15 @@
 Es el único lugar donde `jobs` recibe tareas de los módulos de análisis. Así `jobs` no importa a esos
 módulos y no hay importaciones circulares. Registrar dos veces el mismo elemento no tiene efecto.
 """
-
 from collections.abc import Callable
 
 from app.jobs import tareas
 from app.modules.audio import analizador as analizador_audio
 from app.modules.audio import service as servicio_audio
 from app.modules.audio import tarea as tarea_audio
+from app.modules.vision import analizador as analizador_video
+from app.modules.vision import service as servicio_video
+from app.modules.vision import tarea as tarea_video
 from app.plugins.registro import REGISTRO
 
 
@@ -20,8 +22,17 @@ def registrar() -> None:
         tarea_audio.analisis_audio,
         al_terminar=tarea_audio.al_terminar,
     )
+    analizador_video.registrar(REGISTRO)
+    tareas.registrar(
+        servicio_video.TIPO_TRABAJO,
+        tarea_video.analisis_video,
+        al_terminar=tarea_video.al_terminar,
+    )
 
 
 def lanzadores() -> dict[str, Callable]:
     """Función que inicia el análisis de cada analizador disponible en la API. Firma: (conexión, video_id) -> trabajo_id."""
-    return {analizador_audio.IDENTIFICADOR: servicio_audio.iniciar_analisis}
+    return {
+        analizador_audio.IDENTIFICADOR: servicio_audio.iniciar_analisis,
+        analizador_video.IDENTIFICADOR: servicio_video.iniciar_analisis,
+    }

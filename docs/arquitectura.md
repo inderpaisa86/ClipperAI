@@ -1,7 +1,7 @@
 # ClipperAI: Arquitectura técnica
 
 **Versión:** 1.6
-**Estado:** Fase 1 completa (backend, frontend, proxy y Módulo 1 de videos). Módulo 2 en curso: cola de trabajos (Etapa 1), estructura de análisis con contrato de analizadores y API de consulta (Etapa 2), y analizador de audio con limpieza de datos derivados (Etapa 3). El analizador de audio está registrado y se inicia con `POST /api/v1/videos/{id}/analisis` (D-053). Vocabulario de señales cerrado (D-052) y umbral vigente (D-051). El análisis tiene los estados `pendiente`, `en_curso`, `completado`, `fallido` y `cancelado` (D-055). Una cancelación no conserva señales parciales (D-057). Decisiones D-046 a D-057.
+**Estado:** Fase 1 completa (backend, frontend, proxy y Módulo 1 de videos). Módulo 2 en curso: cola de trabajos (Etapa 1), estructura de análisis con contrato de analizadores y API de consulta (Etapa 2), y analizador de audio con limpieza de datos derivados (Etapa 3). El analizador de audio está registrado y se inicia con `POST /api/v1/videos/{id}/analisis` (D-053). Vocabulario de señales cerrado (D-052, ampliado en D-059) y umbral vigente (D-051). El análisis tiene los estados `pendiente`, `en_curso`, `completado`, `fallido` y `cancelado` (D-055). Una cancelación no conserva señales parciales (D-057). Etapa 4: analizador visual `video` 1.0.0 (cortes, movimiento y brillo con OpenCV, D-058 a D-062; contrato en `docs/senales.md`). Decisiones D-046 a D-062.
 **Tipo:** Aplicación local de edición inteligente de video.
 
 Las decisiones con su fecha y contexto están en `docs/decisiones.md`. Este documento describe cómo se aplican.
@@ -373,3 +373,48 @@ Los registros que existen hoy en `data/clipperai.db` (proyectos como "Prueba int
 
 - **`frontend/next-env.d.ts`:** tiene cambios sin commit desde antes de la fase de proyectos. Next 16.4.6 reescribe las rutas de tipos de `.next/types/` a `.next/dev/types/` en modo desarrollo, y se regenera con cada `dev` o `build`. Pendiente: decidir si se versiona la versión regenerada o si el archivo sale de Git.
 - **`frontend/tsconfig.tsbuildinfo`:** es caché incremental de `tsc` y está versionado. Cada typecheck lo modifica. Pendiente: quitarlo del seguimiento de Git (`git rm --cached` y entrada en `.gitignore`).
+
+## 19. Análisis visual (Módulo 2, Etapa 4)
+
+Código en `backend/app/modules/vision/`. Decisiones D-058 a D-062. Vocabulario, unidades y parámetros en `docs/senales.md`.
+
+### 19.1 Piezas
+
+| Archivo | Responsabilidad |
+|---|---|
+| `parametros.py` | `ParametrosVision`: todos los valores configurables, con validación al crearse. |
+| `captura.py` | FFmpeg por tubería: muestra la cuadrícula, reduce el tamaño y entrega imágenes BGR. Sin archivos intermedios. |
+| `medidas.py` | Brillo, fracciones de píxeles cambiados, huella visual y codificación JPEG. Funciones puras. |
+| `seleccion.py` | Elección de fotogramas representativos dentro de un segmento. |
+| `analizador.py` | `AnalizadorVideo`: cumple el contrato `Analizador`. Recibe un estado previo opcional. |
+| `service.py` | Planificación de segmentos e inicio del análisis (`analisis_video`). |
+| `tarea.py` | Ejecución en el proceso hijo, confirmación por segmento y cierre. |
+
+### 19.2 Flujo por segmento
+
+1. Barrido de miniaturas huérfanas, una vez por trabajo (D-060).
+2. Lectura del estado previo desde la base: último cambio de escena, último fotograma y su firma.
+3. FFmpeg decodifica `[anclaje, fin)` con la cuadrícula global. Python calcula brillo y, para cada par de muestras, movimiento y escena.
+4. Selección de fotogramas representativos (D-061). Cada miniatura se escribe en `*.tmp` y se renombra.
+5. Una transacción `BEGIN IMMEDIATE` inserta señales y fotogramas y marca el segmento como `completado` (D-032, D-044).
+6. El segmento `cierre` marca el análisis como `completado` (D-062).
+
+### 19.3 Rendimiento medido
+
+Video sintético de 10 minutos, 1920 × 1080, 30 fps, en el i7-1165G7 con 16 GB de RAM y sin GPU. Ejecutado con el worker real y una base temporal.
+
+| Medida | Valor |
+|---|---|
+| Tiempo total del análisis | 14,3 s |
+| Pico de memoria del árbol de procesos (Python y FFmpeg) | 241 MB |
+| Pico de memoria del FFmpeg hijo | 92 MB |
+| Señales | 600 de brillo y 599 de movimiento, una por segundo |
+| Fotogramas representativos | 1 (el video sintético no tiene cortes) |
+
+Este resultado vale para ese video. El contenido sintético es simple y se codificó con `ultrafast`, así que no se debe extrapolar a videos reales ni a duraciones de una hora.
+
+### 19.4 Limitaciones
+
+- Los cortes, el movimiento y el brillo son métricas clásicas. Ver las limitaciones en `docs/senales.md`.
+- La rotación de los metadatos no se corrige. El tamaño de la imagen sale de la base.
+- Cambiar cualquier parámetro exige reanalizar el video.

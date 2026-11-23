@@ -39,9 +39,11 @@ def obtener_ejecucion(
     ).fetchone()
 
 
-def hay_ejecucion(conexion: sqlite3.Connection) -> bool:
+def hay_ejecucion(conexion: sqlite3.Connection, excepto_trabajo_id: int | None = None) -> bool:
+    """True si hay un trabajo ejecutándose. `excepto_trabajo_id` omite el propio trabajo que consulta."""
     return conexion.execute(
-        "SELECT 1 FROM trabajos WHERE estado = 'ejecutando' LIMIT 1"
+        "SELECT 1 FROM trabajos WHERE estado = 'ejecutando' AND (? IS NULL OR id <> ?) LIMIT 1",
+        (excepto_trabajo_id, excepto_trabajo_id),
     ).fetchone() is not None
 
 

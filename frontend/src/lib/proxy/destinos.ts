@@ -5,7 +5,14 @@ const SEGMENTO_VALIDO = /^[a-z0-9_-]+$/i;
  * Vocabulario cerrado de tipos de señal. Debe coincidir con TIPOS_SENAL_PERMITIDOS en
  * backend/app/plugins/contrato.py. La prueba test_vocabulario_coincide_con_el_proxy lo verifica.
  */
-export const TIPOS_SENAL_PERMITIDOS = ["energia_audio", "silencio", "cambio_intensidad"] as const;
+export const TIPOS_SENAL_PERMITIDOS = [
+  "energia_audio",
+  "silencio",
+  "cambio_intensidad",
+  "cambio_escena",
+  "movimiento",
+  "brillo",
+] as const;
 
 /** Tipos de valor que admite un parámetro de consulta. Ninguno admite signo ni decimales. */
 export type TipoParametro = "entero_positivo" | "entero_no_negativo" | "tipo_senal";

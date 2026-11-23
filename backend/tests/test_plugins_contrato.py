@@ -55,7 +55,7 @@ def test_senal_de_duracion_cero_es_valida_para_eventos_puntuales():
     [
         {"tipo": "Escena"},
         {"tipo": "escena"},
-        {"tipo": "movimiento"},
+        {"tipo": "tipo_no_existente"},
         {"tipo": "escena-x"},
         {"tipo": ""},
         {"tipo": None},
